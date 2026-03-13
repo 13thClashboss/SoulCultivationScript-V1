@@ -1,8 +1,65 @@
--- SOUL CULTIVATION - ESP (AURAS + NAMES + TREASURE + ALTARS)
--- Dark blue theme, distance slider, Players/Treasure/Altar dropdowns.
--- Sasuke EMS Sharingan icon, Right Shift toggle, minimize notifications.
+-- SOUL CULTIVATION - HUB (ESP + FARMING + SETTINGS)
+-- Blue theme, dot-corner icons, auto-cleanup + respawn on re-run.
 -- Parented to PlayerGui for better compatibility with Xeno.
 
+-- ============================================
+-- FULL CLEANUP OF PREVIOUS INSTANCE
+-- Kills every connection, mover, and GUI from the last run
+-- before anything else is created or hooked.
+-- ============================================
+do
+    -- 1. Disconnect all previously stored connections via the global registry
+    if _G.__SoulHubConnections then
+        for _, c in ipairs(_G.__SoulHubConnections) do
+            pcall(function() c:Disconnect() end)
+        end
+        _G.__SoulHubConnections = nil
+        print("[SoulHub] Previous connections disconnected")
+    end
+
+    -- 2. Destroy the old GUI (SoulHub + any lingering notifications)
+    local _pg = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+    if _pg then
+        for _, gui in ipairs(_pg:GetChildren()) do
+            if gui.Name == "SoulHub" or gui.Name == "SoulNotif" then
+                pcall(function() gui:Destroy() end)
+            end
+        end
+    end
+
+    -- 3. Remove any flight/noclip movers left in HumanoidRootPart
+    local _char = game:GetService("Players").LocalPlayer.Character
+    if _char then
+        local _hrp = _char:FindFirstChild("HumanoidRootPart")
+        if _hrp then
+            for _, name in ipairs({"_ABossBodyVel","_ABossBodyGyro","_ABossAngVel",
+                                   "SoulFarmVelocity","SoulFarmGyro"}) do
+                local m = _hrp:FindFirstChild(name)
+                if m then pcall(function() m:Destroy() end) end
+            end
+        end
+        -- Restore humanoid state
+        local _hum = _char:FindFirstChildOfClass("Humanoid")
+        if _hum then
+            pcall(function() _hum.PlatformStand = false end)
+        end
+        -- Restore collision on all parts
+        for _, p in ipairs(_char:GetDescendants()) do
+            if p:IsA("BasePart") then
+                pcall(function() p.CanCollide = true end)
+            end
+        end
+    end
+
+    -- 4. Clear any _G farming flags so the old boss/kill-aura loops stop
+    _G.__SoulHubAutoBoss  = false
+    _G.__SoulHubKillAura  = false
+    _G.__SoulHubNoClip    = false
+end
+
+-- ============================================
+-- STORE SOURCE FOR TELEPORT RE-EXECUTE
+-- ============================================
 do
     local src = nil
     pcall(function() src = getscriptbytecode and getscriptbytecode(script) end)
@@ -13,7 +70,7 @@ do
         pcall(function()
             for _, s in ipairs(game:GetService("ScriptContext").Scripts) do
                 local ok, result = pcall(function() return getscriptbytecode(s) end)
-                if ok and result then src = result break end
+                if ok and result then src = result; break end
             end
         end)
     end
@@ -33,6 +90,45 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local TweenService = game:GetService("TweenService")
 
 -- ============================================
+-- CHARACTER RESPAWN FOR FRESH BODY RELOAD
+-- Kills the character immediately, waits for
+-- the new body to fully load, then proceeds.
+-- ============================================
+do
+    local _char = LocalPlayer.Character
+    local _hum  = _char and _char:FindFirstChildOfClass("Humanoid")
+    if _hum and _hum.Health > 0 then
+        print("[SoulHub] Respawning for fresh body reload...")
+        -- Trigger death via health (works in most games)
+        local respawned = false
+        local _respawnConn
+        _respawnConn = LocalPlayer.CharacterAdded:Connect(function(newChar)
+            respawned = true
+            pcall(function() _respawnConn:Disconnect() end)
+        end)
+        pcall(function() _hum.Health = 0 end)
+        -- Fallback: if health kill doesn't work, try LoadCharacter
+        local timeout = tick()
+        while not respawned and (tick() - timeout) < 3 do
+            task.wait(0.1)
+        end
+        if not respawned then
+            pcall(function() LocalPlayer:LoadCharacter() end)
+            timeout = tick()
+            while not respawned and (tick() - timeout) < 5 do
+                task.wait(0.1)
+            end
+        end
+        -- Wait for the new character to be fully loaded
+        local newChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+        newChar:WaitForChild("HumanoidRootPart", 10)
+        newChar:WaitForChild("Humanoid", 10)
+        task.wait(0.5)  -- brief settle so physics is stable
+        print("[SoulHub] Fresh body loaded — continuing setup")
+    end
+end
+
+-- ============================================
 -- NOTIFICATION (bottom-right)
 -- ============================================
 local function showNotification(message, duration)
@@ -46,7 +142,7 @@ local function showNotification(message, duration)
     local notif = Instance.new("Frame")
     notif.Size = UDim2.new(0, 280, 0, 52)
     notif.Position = UDim2.new(1, -290, 1, -70)
-    notif.BackgroundColor3 = Color3.fromRGB(195, 220, 248)  -- light blue notification bg
+    notif.BackgroundColor3 = Color3.fromRGB(14, 16, 26)     -- charcoal black
     notif.BackgroundTransparency = 0
     notif.BorderSizePixel = 0
     notif.Parent = notifGui
@@ -56,7 +152,7 @@ local function showNotification(message, duration)
     corner.Parent = notif
 
     -- Dot-corner accent marks (matches icon frame style)
-    local dotClr = Color3.fromRGB(40, 100, 195)
+    local dotClr = Color3.fromRGB(55, 120, 230)
     local dotSz  = 5
     local dotPositions = {
         UDim2.new(0, -1, 0, -1),
@@ -78,7 +174,7 @@ local function showNotification(message, duration)
     end
 
     local stroke = Instance.new("UIStroke")
-    stroke.Color = Color3.fromRGB(40, 100, 195)   -- dark blue border
+    stroke.Color = Color3.fromRGB(55, 120, 230)
     stroke.Thickness = 1.5
     stroke.Transparency = 0
     stroke.Parent = notif
@@ -86,7 +182,7 @@ local function showNotification(message, duration)
     local bar = Instance.new("Frame")
     bar.Size = UDim2.new(0, 3, 1, -16)
     bar.Position = UDim2.new(0, 10, 0, 8)
-    bar.BackgroundColor3 = Color3.fromRGB(20, 80, 170)  -- navy accent bar
+    bar.BackgroundColor3 = Color3.fromRGB(55, 120, 230)
     bar.BorderSizePixel = 0
     bar.Parent = notif
     local barCorner = Instance.new("UICorner")
@@ -98,7 +194,7 @@ local function showNotification(message, duration)
     text.Position = UDim2.new(0, 22, 0, 0)
     text.BackgroundTransparency = 1
     text.Text = message
-    text.TextColor3 = Color3.fromRGB(10, 45, 120)  -- dark navy text on light bg
+    text.TextColor3 = Color3.fromRGB(185, 210, 255)
     text.TextTransparency = 0
     text.TextSize = 14
     text.Font = Enum.Font.GothamSemibold
@@ -131,19 +227,31 @@ end
 -- CLEANUP
 -- ============================================
 local Connections = {}
+-- Register connections table in _G so the NEXT run can disconnect them all cleanly
+_G.__SoulHubConnections = Connections
 
 local function CleanupLeftovers()
     local char = LocalPlayer.Character
     if not char then return end
     local root = char:FindFirstChild("HumanoidRootPart")
     if root then
-        if root:FindFirstChild("SoulFarmVelocity") then root.SoulFarmVelocity:Destroy() end
-        if root:FindFirstChild("SoulFarmGyro") then root.SoulFarmGyro:Destroy() end
+        -- Remove all known movers by name
+        for _, n in ipairs({"SoulFarmVelocity","SoulFarmGyro",
+                            "_ABossBodyVel","_ABossBodyGyro","_ABossAngVel"}) do
+            local m = root:FindFirstChild(n)
+            if m then pcall(function() m:Destroy() end) end
+        end
     end
     local humanoid = char:FindFirstChildOfClass("Humanoid")
     if humanoid then
-        humanoid.PlatformStand = false
-        if humanoid.Sit then humanoid.Sit = false end
+        pcall(function() humanoid.PlatformStand = false end)
+        pcall(function() humanoid.Sit = false end)
+    end
+    -- Restore collision
+    for _, p in ipairs(char:GetDescendants()) do
+        if p:IsA("BasePart") then
+            pcall(function() p.CanCollide = true end)
+        end
     end
 end
 
@@ -184,45 +292,34 @@ table.insert(Connections, charAddedConn)
 -- THEME
 -- ============================================
 local Colors = {
-    Frame      = Color3.fromRGB(185, 215, 245),   -- light steel blue  (main window bg)
-    Darker     = Color3.fromRGB(160, 195, 230),   -- slightly darker   (title bar)
-    Card       = Color3.fromRGB(200, 225, 250),   -- soft card blue
-    Accent     = Color3.fromRGB(20,  80,  170),   -- deep navy accent
-    TextMain   = Color3.fromRGB(10,  45,  120),   -- dark navy text
-    TextMuted  = Color3.fromRGB(40,  90,  160),   -- mid-blue muted text
-    Border     = Color3.fromRGB(60,  120, 190),   -- medium-dark blue border
-    ToggleOn   = Color3.fromRGB(20,  80,  170),   -- navy toggle active
-    ToggleOff  = Color3.fromRGB(140, 180, 220),   -- pale blue toggle off
-    SliderBG   = Color3.fromRGB(160, 195, 230),   -- slider track
-    SliderFill = Color3.fromRGB(20,  80,  170),   -- slider fill navy
+    Frame      = Color3.fromRGB(14,  16,  26),    -- charcoal black (main bg)
+    Darker     = Color3.fromRGB(9,   11,  20),    -- deeper charcoal (title/sidebar)
+    Card       = Color3.fromRGB(18,  22,  40),    -- very dark blue card
+    Accent     = Color3.fromRGB(55,  120, 230),   -- bright blue accent
+    TextMain   = Color3.fromRGB(185, 210, 255),   -- light blue-white text
+    TextMuted  = Color3.fromRGB(75,  110, 175),   -- muted blue text
+    Border     = Color3.fromRGB(28,  45,  95),    -- very dark blue border
+    ToggleOn   = Color3.fromRGB(55,  120, 230),   -- bright blue toggle on
+    ToggleOff  = Color3.fromRGB(22,  30,  58),    -- very dark toggle off
+    SliderBG   = Color3.fromRGB(20,  27,  52),    -- very dark slider track
+    SliderFill = Color3.fromRGB(55,  120, 230),   -- bright blue slider fill
 }
 
--- UI Customization settings (live-editable)
+-- UI Customization: accent hue + opacity only. Charcoal bg is fixed.
 local UICustom = {
-    AccentH  = 215,   -- hue 0-360  (215 = light-blue family)
-    AccentS  = 0.88,  -- saturation
-    AccentV  = 0.67,  -- value (dark enough for text on light bg)
-    BgH      = 210,   -- background hue
-    BgS      = 0.40,  -- background saturation (pastel)
-    BgV      = 0.96,  -- background value (near-white)
-    Opacity  = 1.0,
+    AccentH = 215,   -- 0–360
+    Opacity = 1.0,
 }
 
 local function ApplyAccent()
-    -- Dark navy accent for text / toggles / fills
-    local acc = Color3.fromHSV(UICustom.AccentH/360, UICustom.AccentS, UICustom.AccentV)
+    local h   = UICustom.AccentH / 360
+    local acc = Color3.fromHSV(h, 0.80, 0.92)
     Colors.Accent     = acc
     Colors.ToggleOn   = acc
     Colors.SliderFill = acc
-    Colors.TextMain   = Color3.fromHSV(UICustom.AccentH/360, 0.92, UICustom.AccentV * 0.75)
-    Colors.TextMuted  = Color3.fromHSV(UICustom.AccentH/360, 0.70, UICustom.AccentV * 0.90)
-    Colors.Border     = Color3.fromHSV(UICustom.AccentH/360, 0.60, UICustom.AccentV * 1.0)
-    -- Light pastel background
-    Colors.Frame      = Color3.fromHSV(UICustom.BgH/360, UICustom.BgS, UICustom.BgV)
-    Colors.Darker     = Color3.fromHSV(UICustom.BgH/360, UICustom.BgS + 0.08, UICustom.BgV - 0.08)
-    Colors.Card       = Color3.fromHSV(UICustom.BgH/360, UICustom.BgS - 0.05, UICustom.BgV + 0.02)
-    Colors.ToggleOff  = Color3.fromHSV(UICustom.BgH/360, UICustom.BgS + 0.10, UICustom.BgV - 0.15)
-    Colors.SliderBG   = Color3.fromHSV(UICustom.BgH/360, UICustom.BgS + 0.05, UICustom.BgV - 0.10)
+    Colors.TextMain   = Color3.fromHSV(h, 0.22, 0.96)
+    Colors.TextMuted  = Color3.fromHSV(h, 0.52, 0.74)
+    Colors.Border     = Color3.fromHSV(h, 0.72, 0.42)
     if MainFrame then
         MainFrame.BackgroundTransparency = 1 - UICustom.Opacity
     end
@@ -853,10 +950,10 @@ local ICON_FARMING = "rbxassetid://113977003779500"
 -- SHARED ICON FRAME BUILDER
 -- Creates the dot-corner framed background used by all tab icons.
 -- ============================================
-local ICON_BORDER  = Color3.fromRGB(40, 100, 200)
-local ICON_DOT_CLR = Color3.fromRGB(90, 180, 255)
-local ICON_BG      = Color3.fromRGB(140, 180, 220)
-local ICON_DOT_SZ  = 4
+local ICON_BORDER  = Color3.fromRGB(55, 120, 230)
+local ICON_DOT_CLR = Color3.fromRGB(55, 120, 230)
+local ICON_BG      = Color3.fromRGB(11, 14, 26)
+local ICON_DOT_SZ  = 5
 local ICON_CORN_R  = 10
 
 local function BuildIconFrame(parent)
@@ -878,7 +975,7 @@ local function BuildIconFrame(parent)
         Parent                 = parent,
     })
     RoundCorner(border, ICON_CORN_R)
-    Stroke(border, ICON_BORDER, 1.5)
+    Stroke(border, ICON_BORDER, 1.5)  -- same border weight as Sharingan
     local half = ICON_DOT_SZ / 2
     local dotPositions = {
         UDim2.new(0, -half, 0, -half),
@@ -936,7 +1033,7 @@ end
 -- ============================================
 local function BuildSettingsSlidersIcon(parent)
     local bg = BuildIconFrame(parent)
-    local C  = Color3.fromRGB(90, 180, 255)
+    local C  = Color3.fromRGB(55, 120, 230)
     local W  = 56
     local H  = 46
     local tracks = {
@@ -950,7 +1047,7 @@ local function BuildSettingsSlidersIcon(parent)
         local track = Create("Frame", {
             Size             = UDim2.new(0, lineX1 - lineX0, 0, trackH),
             Position         = UDim2.new(0, lineX0, 0, t.y - 1),
-            BackgroundColor3 = Color3.fromRGB(25, 55, 105),
+            BackgroundColor3 = Color3.fromRGB(28, 40, 80),
             BorderSizePixel  = 0, ZIndex = 3, Parent = bg,
         })
         RoundCorner(track, 2)
@@ -971,7 +1068,7 @@ local function BuildSettingsSlidersIcon(parent)
         local inner = Create("Frame", {
             Size             = UDim2.new(0, knobR, 0, knobR),
             Position         = UDim2.new(0, t.knobX - knobR / 2, 0, t.y - knobR / 2),
-            BackgroundColor3 = Color3.fromRGB(180, 225, 255),
+            BackgroundColor3 = Color3.fromRGB(160, 200, 255),
             BorderSizePixel  = 0, ZIndex = 6, Parent = bg,
         })
         RoundCorner(inner, 999)
@@ -981,52 +1078,49 @@ end
 
 -- ============================================
 -- N4: MESSAGE DOTS icon  (Notifications tab)
--- Speech bubble with three dot indicators + tail
+-- Uses UDim2 fractions so it fills the icon frame like Sharingan.
+-- Bubble: 14% inset all sides, tail bottom-left.
 -- ============================================
 local function BuildNotifMessageIcon(parent)
-    local bg = BuildIconFrame(parent)
-    local C  = Color3.fromRGB(90, 180, 255)
-    local W  = 56
-    local H  = 46
-    local bW, bH = 34, 22
-    local bX = math.floor((W - bW) / 2)
-    local bY = math.floor(H * 0.10)
+    local bg  = BuildIconFrame(parent)
+    local C   = Color3.fromRGB(55, 120, 230)
+    local BGC = Color3.fromRGB(18, 24, 50)
+
+    -- Bubble body: fills most of the frame, leaves room for tail at bottom
     local bubble = Create("Frame", {
-        Size             = UDim2.new(0, bW, 0, bH),
-        Position         = UDim2.new(0, bX, 0, bY),
-        BackgroundColor3 = Color3.fromRGB(15, 45, 95),
+        Size     = UDim2.new(0.80, 0, 0.68, 0),
+        Position = UDim2.new(0.10, 0, 0.08, 0),
+        BackgroundColor3 = BGC,
         BorderSizePixel  = 0, ZIndex = 3, Parent = bg,
     })
     RoundCorner(bubble, 6)
-    Stroke(bubble, C, 1.2)
-    local dSz  = 4
-    local dGap = 5
-    local totalW = 3 * dSz + 2 * dGap
-    local dX0 = math.floor((bW - totalW) / 2)
-    local dY0 = math.floor(bH / 2 - dSz / 2)
-    for i = 0, 2 do
+    Stroke(bubble, C, 1.5)
+
+    -- Three dots centred in bubble using UDim2 fractions
+    local dotPositions = { 0.22, 0.50, 0.78 }
+    for _, xFrac in ipairs(dotPositions) do
         local dot = Create("Frame", {
-            Size             = UDim2.new(0, dSz, 0, dSz),
-            Position         = UDim2.new(0, dX0 + i * (dSz + dGap), 0, dY0),
+            Size     = UDim2.new(0.14, 0, 0.26, 0),
+            Position = UDim2.new(xFrac - 0.07, 0, 0.37, 0),
             BackgroundColor3 = C,
             BorderSizePixel  = 0, ZIndex = 4, Parent = bubble,
         })
         RoundCorner(dot, 999)
     end
-    -- Tail: small downward pointer bottom-left of bubble
-    local tailW, tailH = 7, 6
+
+    -- Tail: small rounded nub bottom-left of bubble
     local tail = Create("Frame", {
-        Size             = UDim2.new(0, tailW, 0, tailH),
-        Position         = UDim2.new(0, bX + 5, 0, bY + bH - 1),
-        BackgroundColor3 = Color3.fromRGB(15, 45, 95),
+        Size     = UDim2.new(0.18, 0, 0.20, 0),
+        Position = UDim2.new(0.14, 0, 0.72, 0),
+        BackgroundColor3 = BGC,
         BorderSizePixel  = 0, ZIndex = 3, Parent = bg,
     })
-    RoundCorner(tail, 2)
-    -- Cover seam between tail and bubble body
+    RoundCorner(tail, 3)
+    -- Left accent line continuing the bubble stroke onto the tail
     Create("Frame", {
-        Size             = UDim2.new(0, tailW - 2, 0, 3),
-        Position         = UDim2.new(0, bX + 6, 0, bY + bH - 2),
-        BackgroundColor3 = Color3.fromRGB(15, 45, 95),
+        Size     = UDim2.new(0.025, 0, 0.22, 0),
+        Position = UDim2.new(0.14, 0, 0.70, 0),
+        BackgroundColor3 = C,
         BorderSizePixel  = 0, ZIndex = 5, Parent = bg,
     })
     return bg
@@ -1108,7 +1202,7 @@ local function CreateHomeTab()
     })
 
     rejoinBtn.MouseEnter:Connect(function()
-        TweenService:Create(rejoinBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(168, 200, 235)}):Play()
+        TweenService:Create(rejoinBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(30, 40, 72)}):Play()
     end)
     rejoinBtn.MouseLeave:Connect(function()
         TweenService:Create(rejoinBtn, TweenInfo.new(0.15), {BackgroundColor3 = Colors.Card}):Play()
@@ -2285,7 +2379,7 @@ local function CreateFarmingTab()
 
         card.MouseEnter:Connect(function()
             TweenService:Create(card, TweenInfo.new(0.12),
-                {BackgroundColor3 = Color3.fromRGB(170, 200, 235)}):Play()
+                {BackgroundColor3 = Color3.fromRGB(30, 40, 72)}):Play()
         end)
         card.MouseLeave:Connect(function()
             TweenService:Create(card, TweenInfo.new(0.12),
@@ -2323,11 +2417,11 @@ local function CreateFarmingTab()
 
     local bossDumpBtn = Create("TextButton", {
         Size = UDim2.new(1, -20, 0, 44), Position = UDim2.new(0, 10, 0, y),
-        BackgroundColor3 = Color3.fromRGB(185, 210, 240), BorderSizePixel = 0,
+        BackgroundColor3 = Color3.fromRGB(24, 30, 52), BorderSizePixel = 0,
         Text = "", AutoButtonColor = false, Parent = scroll
     })
     RoundCorner(bossDumpBtn, 10)
-    Create("UIStroke", { Color = Color3.fromRGB(30, 70, 140), Thickness = 1, Parent = bossDumpBtn })
+    Create("UIStroke", { Color = Color3.fromRGB(35, 55, 110), Thickness = 1, Parent = bossDumpBtn })
     Create("TextLabel", {
         Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(0, 14, 0, 10),
         BackgroundTransparency = 1, Text = "🔎", TextSize = 18,
@@ -2347,11 +2441,11 @@ local function CreateFarmingTab()
     })
     bossDumpBtn.MouseEnter:Connect(function()
         TweenService:Create(bossDumpBtn, TweenInfo.new(0.12),
-            {BackgroundColor3 = Color3.fromRGB(170, 200, 235)}):Play()
+            {BackgroundColor3 = Color3.fromRGB(30, 40, 72)}):Play()
     end)
     bossDumpBtn.MouseLeave:Connect(function()
         TweenService:Create(bossDumpBtn, TweenInfo.new(0.12),
-            {BackgroundColor3 = Color3.fromRGB(185, 210, 240)}):Play()
+            {BackgroundColor3 = Color3.fromRGB(24, 30, 52)}):Play()
     end)
     bossDumpBtn.MouseButton1Click:Connect(function()
         showNotification("🔎  Boss scan — check executor console", 3)
@@ -2383,11 +2477,11 @@ local function CreateFarmingTab()
 
     local scanBtn = Create("TextButton", {
         Size = UDim2.new(1, -20, 0, 44), Position = UDim2.new(0, 10, 0, y),
-        BackgroundColor3 = Color3.fromRGB(185, 210, 240), BorderSizePixel = 0,
+        BackgroundColor3 = Color3.fromRGB(24, 30, 52), BorderSizePixel = 0,
         Text = "", AutoButtonColor = false, Parent = scroll
     })
     RoundCorner(scanBtn, 10)
-    Create("UIStroke", { Color = Color3.fromRGB(30, 70, 140), Thickness = 1, Parent = scanBtn })
+    Create("UIStroke", { Color = Color3.fromRGB(35, 55, 110), Thickness = 1, Parent = scanBtn })
 
     Create("TextLabel", {
         Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(0, 14, 0, 10),
@@ -2409,11 +2503,11 @@ local function CreateFarmingTab()
 
     scanBtn.MouseEnter:Connect(function()
         TweenService:Create(scanBtn, TweenInfo.new(0.12),
-            {BackgroundColor3 = Color3.fromRGB(170, 200, 235)}):Play()
+            {BackgroundColor3 = Color3.fromRGB(30, 40, 72)}):Play()
     end)
     scanBtn.MouseLeave:Connect(function()
         TweenService:Create(scanBtn, TweenInfo.new(0.12),
-            {BackgroundColor3 = Color3.fromRGB(185, 210, 240)}):Play()
+            {BackgroundColor3 = Color3.fromRGB(24, 30, 52)}):Play()
     end)
 
     scanBtn.MouseButton1Click:Connect(function()
@@ -2477,11 +2571,11 @@ local function CreateFarmingTab()
     -- ── Targeted RemoteEvents dump (what got cut off in the log) ─────────────
     local remoteSpyBtn = Create("TextButton", {
         Size = UDim2.new(1, -20, 0, 44), Position = UDim2.new(0, 10, 0, y),
-        BackgroundColor3 = Color3.fromRGB(185, 210, 240), BorderSizePixel = 0,
+        BackgroundColor3 = Color3.fromRGB(24, 30, 52), BorderSizePixel = 0,
         Text = "", AutoButtonColor = false, Parent = scroll
     })
     RoundCorner(remoteSpyBtn, 10)
-    Create("UIStroke", { Color = Color3.fromRGB(30, 70, 140), Thickness = 1, Parent = remoteSpyBtn })
+    Create("UIStroke", { Color = Color3.fromRGB(35, 55, 110), Thickness = 1, Parent = remoteSpyBtn })
     Create("TextLabel", {
         Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(0, 14, 0, 10),
         BackgroundTransparency = 1, Text = "📡", TextSize = 18,
@@ -2501,11 +2595,11 @@ local function CreateFarmingTab()
     })
     remoteSpyBtn.MouseEnter:Connect(function()
         TweenService:Create(remoteSpyBtn, TweenInfo.new(0.12),
-            {BackgroundColor3 = Color3.fromRGB(170, 200, 235)}):Play()
+            {BackgroundColor3 = Color3.fromRGB(30, 40, 72)}):Play()
     end)
     remoteSpyBtn.MouseLeave:Connect(function()
         TweenService:Create(remoteSpyBtn, TweenInfo.new(0.12),
-            {BackgroundColor3 = Color3.fromRGB(185, 210, 240)}):Play()
+            {BackgroundColor3 = Color3.fromRGB(24, 30, 52)}):Play()
     end)
     remoteSpyBtn.MouseButton1Click:Connect(function()
         showNotification("📡  Dumping RS.RemoteEvents — check console", 3)
@@ -2551,205 +2645,292 @@ end
 local function CreateSettingsTab()
     local scroll = Create("ScrollingFrame", {
         Size = UDim2.new(1, -8, 1, -8), Position = UDim2.new(0, 4, 0, 4),
-        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4,
-        CanvasSize = UDim2.new(0, 0, 0, 0), Parent = ContentFrame
+        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+        CanvasSize = UDim2.new(0, 0, 0, 0), Parent = ContentFrame,
+        ScrollBarImageColor3 = Colors.Border,
     })
 
-    local y = 12
+    local y = 14
 
-    -- Section header helper
-    local function SectionLabel(text, posY)
+    local function SecLabel(txt, posY)
         Create("TextLabel", {
-            Size = UDim2.new(1, -20, 0, 20), Position = UDim2.new(0, 12, 0, posY),
-            BackgroundTransparency = 1, Text = text, TextColor3 = Colors.TextMain,
-            TextSize = 13, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left,
-            Parent = scroll
+            Size = UDim2.new(1, -20, 0, 14), Position = UDim2.new(0, 12, 0, posY),
+            BackgroundTransparency = 1, Text = txt:upper(),
+            TextColor3 = Colors.TextMuted, TextSize = 9, Font = Enum.Font.GothamBold,
+            TextXAlignment = Enum.TextXAlignment.Left, LetterSpacing = 2, Parent = scroll,
         })
     end
 
-    -- Generic horizontal slider factory
-    local function MakeSlider(posY, labelText, minV, maxV, initV, fmt, onChange)
-        local card = Create("Frame", {
-            Size = UDim2.new(1, -20, 0, 68), Position = UDim2.new(0, 10, 0, posY),
-            BackgroundColor3 = Colors.Card, BorderSizePixel = 0, Parent = scroll
-        })
-        RoundCorner(card, 12)
-        Create("Frame", {Size = UDim2.new(0, 3, 1, 0), BackgroundColor3 = Colors.Accent,
-            BorderSizePixel = 0, Parent = card})
+    -- ════════════════════════════════════════════
+    -- UI CUSTOMIZATION — compact single card
+    -- Left: color wheel (ring)   Right: swatch + opacity + reset
+    -- ════════════════════════════════════════════
+    SecLabel("🎨  Appearance", y)
+    y = y + 20
 
-        Create("TextLabel", {
-            Size = UDim2.new(0.6, 0, 0, 20), Position = UDim2.new(0, 14, 0, 8),
-            BackgroundTransparency = 1, Text = labelText, TextColor3 = Colors.TextMain,
-            TextSize = 12, Font = Enum.Font.GothamSemibold, TextXAlignment = Enum.TextXAlignment.Left,
-            Parent = card
-        })
-        local valLbl = Create("TextLabel", {
-            Size = UDim2.new(0.36, 0, 0, 20), Position = UDim2.new(0.62, 0, 0, 8),
-            BackgroundTransparency = 1, Text = string.format(fmt, initV),
-            TextColor3 = Colors.Accent, TextSize = 12, Font = Enum.Font.GothamBold,
-            TextXAlignment = Enum.TextXAlignment.Right, Parent = card
-        })
+    -- Card is 108 px tall — tight but breathable
+    local CARD_H = 112
+    local custCard = Create("Frame", {
+        Size = UDim2.new(1, -20, 0, CARD_H),
+        Position = UDim2.new(0, 10, 0, y),
+        BackgroundColor3 = Colors.Card, BorderSizePixel = 0, Parent = scroll,
+    })
+    RoundCorner(custCard, 12)
+    -- Accent left bar
+    local acBar = Create("Frame", {
+        Size = UDim2.new(0, 3, 1, 0), BackgroundColor3 = Colors.Accent,
+        BorderSizePixel = 0, Parent = custCard,
+    })
+    RoundCorner(acBar, 3)
 
-        local bar = Create("Frame", {
-            Size = UDim2.new(1, -32, 0, 7), Position = UDim2.new(0, 16, 0, 38),
-            BackgroundColor3 = Colors.SliderBG, BorderSizePixel = 0, Parent = card
-        })
-        RoundCorner(bar, 4)
-        local pct0 = (initV - minV) / (maxV - minV)
-        local fillF = Create("Frame", {
-            Size = UDim2.new(pct0, 0, 1, 0), BackgroundColor3 = Colors.SliderFill,
-            BorderSizePixel = 0, Parent = bar
-        })
-        RoundCorner(fillF, 4)
-        local knobB = Create("TextButton", {
-            Size = UDim2.new(0, 16, 0, 16), AnchorPoint = Vector2.new(0.5, 0.5),
-            Position = UDim2.new(pct0, 0, 0.5, 0),
-            BackgroundColor3 = Colors.Accent, BorderSizePixel = 0,
-            Text = "", AutoButtonColor = false, Parent = bar
-        })
-        RoundCorner(knobB, 999)
+    -- ── Color wheel ring ──────────────────────────────────────────
+    local RING_SZ   = 88          -- outer diameter
+    local RING_X    = 14          -- card-relative X of ring top-left
+    local RING_Y    = math.floor((CARD_H - RING_SZ) / 2)
+    local SEG_N     = 30          -- more segments = smoother
+    local OUTER_R   = RING_SZ / 2
+    local INNER_R   = OUTER_R * 0.54
+    local CX        = RING_X + OUTER_R
+    local CY        = RING_Y + OUTER_R
+    local PI2       = math.pi * 2
+    local ringSegs  = {}
 
-        local drag = false
-        local function apply(mx)
-            local bsz = bar.AbsoluteSize.X
-            if bsz <= 0 then return end
-            local p = math.clamp((mx - bar.AbsolutePosition.X) / bsz, 0, 1)
-            local v = minV + p * (maxV - minV)
-            if fmt:find("d") or (maxV - minV) > 10 then v = math.floor(v + 0.5) end
-            valLbl.Text = string.format(fmt, v)
-            fillF.Size = UDim2.new(p, 0, 1, 0)
-            knobB.Position = UDim2.new(p, 0, 0.5, 0)
-            onChange(v)
-        end
-        knobB.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then drag = true end end)
-        bar.InputBegan:Connect(function(i)
-            if i.UserInputType == Enum.UserInputType.MouseButton1 then drag = true; apply(i.Position.X) end
-        end)
-        local ue = UserInputService.InputEnded:Connect(function(i)
-            if i.UserInputType == Enum.UserInputType.MouseButton1 then drag = false end
-        end)
-        local uc = UserInputService.InputChanged:Connect(function(i)
-            if drag and i.UserInputType == Enum.UserInputType.MouseMovement then apply(i.Position.X) end
-        end)
-        scroll.AncestryChanged:Connect(function()
-            if not scroll.Parent then ue:Disconnect(); uc:Disconnect() end
-        end)
-        return card
+    for i = 0, SEG_N - 1 do
+        local midAngle = ((i + 0.5) / SEG_N) * PI2
+        local hue      = i / SEG_N
+        local midR     = (OUTER_R + INNER_R) / 2
+        local segW     = math.ceil(PI2 * OUTER_R / SEG_N) + 2
+        local segH     = OUTER_R - INNER_R
+        local sx = CX + math.cos(midAngle) * midR - segW / 2
+        local sy = CY + math.sin(midAngle) * midR - segH / 2
+        local seg = Create("Frame", {
+            Size             = UDim2.new(0, segW, 0, segH),
+            Position         = UDim2.new(0, sx, 0, sy),
+            BackgroundColor3 = Color3.fromHSV(hue, 0.85, 0.95),
+            BorderSizePixel  = 0, Rotation = math.deg(midAngle),
+            ZIndex = 3, Parent = custCard,
+        })
+        RoundCorner(seg, 2)
+        table.insert(ringSegs, { frame = seg, hue = hue })
     end
 
-    -- ── UI Customization ────────────────────────────────────────────────────
-    SectionLabel("🎨  UI Customization", y)
-    y = y + 26
+    -- Centre hole (card colour)
+    Create("Frame", {
+        Size             = UDim2.new(0, INNER_R*2, 0, INNER_R*2),
+        Position         = UDim2.new(0, CX - INNER_R, 0, CY - INNER_R),
+        BackgroundColor3 = Colors.Card,
+        BorderSizePixel  = 0, ZIndex = 4, Parent = custCard,
+    })
 
-    MakeSlider(y, "Accent Hue (color wheel °)", 0, 359, UICustom.AccentH, "%d°", function(v)
-        UICustom.AccentH = v
-        ApplyAccent()
-        if MainFrame then MainFrame.BackgroundTransparency = 1 - UICustom.Opacity end
-    end)
-    y = y + 76
+    -- Selector dot
+    local selDot = Create("Frame", {
+        Size             = UDim2.new(0, 10, 0, 10),
+        BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+        BorderSizePixel  = 0, ZIndex = 6, Parent = custCard,
+    })
+    RoundCorner(selDot, 999)
+    Stroke(selDot, Colors.Border, 1.5)
 
-    MakeSlider(y, "Accent Saturation", 0, 1, UICustom.AccentS, "%.2f", function(v)
-        UICustom.AccentS = v
-        ApplyAccent()
-    end)
-    y = y + 76
+    local function UpdateSelDot(h)
+        local angle = h * PI2 - math.pi / 2
+        local r = (OUTER_R + INNER_R) / 2
+        selDot.Position = UDim2.new(0, CX + math.cos(angle)*r - 5, 0, CY + math.sin(angle)*r - 5)
+    end
+    UpdateSelDot(UICustom.AccentH / 360)
 
-    MakeSlider(y, "Accent Brightness", 0.3, 1, UICustom.AccentV, "%.2f", function(v)
-        UICustom.AccentV = v
-        ApplyAccent()
-    end)
-    y = y + 76
+    -- ── Right panel ───────────────────────────────────────────────
+    local RX   = RING_X + RING_SZ + 12   -- right panel X
+    local RW   = 680                       -- will be clamped by parent; use big number
+    -- (actual width = card width - RX - 10 right pad, but we size by UDim2 offsets from right)
 
-    MakeSlider(y, "UI Opacity", 0.1, 1, UICustom.Opacity, "%.0f%%", function(v)
-        UICustom.Opacity = v
-        if MainFrame then MainFrame.BackgroundTransparency = 1 - v end
-    end)
-    y = y + 76
+    -- Color swatch (shows current accent, labelled with hue degrees)
+    local swatch = Create("Frame", {
+        Size             = UDim2.new(1, -(RX + 10), 0, 26),
+        Position         = UDim2.new(0, RX, 0, 10),
+        BackgroundColor3 = Colors.Accent,
+        BorderSizePixel  = 0, ZIndex = 3, Parent = custCard,
+    })
+    RoundCorner(swatch, 7)
+    Stroke(swatch, Colors.Border, 1)
+    local swLbl = Create("TextLabel", {
+        Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
+        Text = math.floor(UICustom.AccentH).."°",
+        TextColor3 = Color3.fromRGB(255,255,255), TextSize = 11,
+        Font = Enum.Font.GothamBold, Parent = swatch,
+    })
 
-    -- Reset colors button
+    -- Opacity label
+    Create("TextLabel", {
+        Size = UDim2.new(1, -(RX + 10), 0, 11), Position = UDim2.new(0, RX, 0, 42),
+        BackgroundTransparency = 1, Text = "OPACITY",
+        TextColor3 = Colors.TextMuted, TextSize = 9, Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Left, Parent = custCard,
+    })
+
+    -- Opacity slider track
+    local opTrack = Create("Frame", {
+        Size     = UDim2.new(1, -(RX + 10), 0, 5),
+        Position = UDim2.new(0, RX, 0, 57),
+        BackgroundColor3 = Colors.SliderBG, BorderSizePixel = 0, ZIndex = 3, Parent = custCard,
+    })
+    RoundCorner(opTrack, 3)
+    local opFill = Create("Frame", {
+        Size             = UDim2.new(UICustom.Opacity, 0, 1, 0),
+        BackgroundColor3 = Colors.SliderFill,
+        BorderSizePixel  = 0, ZIndex = 4, Parent = opTrack,
+    })
+    RoundCorner(opFill, 3)
+    local opKnob = Create("TextButton", {
+        Size            = UDim2.new(0, 13, 0, 13), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position        = UDim2.new(UICustom.Opacity, 0, 0.5, 0),
+        BackgroundColor3 = Colors.Accent, BorderSizePixel = 0,
+        Text = "", AutoButtonColor = false, ZIndex = 5, Parent = opTrack,
+    })
+    RoundCorner(opKnob, 999)
+    local opValLbl = Create("TextLabel", {
+        Size = UDim2.new(1, -(RX + 10), 0, 11), Position = UDim2.new(0, RX, 0, 67),
+        BackgroundTransparency = 1,
+        Text = math.floor(UICustom.Opacity*100).."%",
+        TextColor3 = Colors.TextMuted, TextSize = 9, Font = Enum.Font.Gotham,
+        TextXAlignment = Enum.TextXAlignment.Right, Parent = custCard,
+    })
+
+    -- Reset button — small, right-aligned
     local resetBtn = Create("TextButton", {
-        Size = UDim2.new(1, -20, 0, 36), Position = UDim2.new(0, 10, 0, y),
-        BackgroundColor3 = Colors.Card, BorderSizePixel = 0,
-        Text = "Reset to Default Colors", TextColor3 = Colors.TextMuted,
-        TextSize = 12, Font = Enum.Font.GothamSemibold,
-        AutoButtonColor = false, Parent = scroll
+        Size     = UDim2.new(1, -(RX + 10), 0, 20),
+        Position = UDim2.new(0, RX, 0, CARD_H - 28),
+        BackgroundColor3 = Colors.Darker, BorderSizePixel = 0,
+        Text = "Reset", TextColor3 = Colors.TextMuted,
+        TextSize = 10, Font = Enum.Font.GothamSemibold,
+        AutoButtonColor = false, ZIndex = 3, Parent = custCard,
     })
-    RoundCorner(resetBtn, 10)
+    RoundCorner(resetBtn, 5)
     Stroke(resetBtn, Colors.Border, 1)
+
+    -- ── Interaction ───────────────────────────────────────────────
+    local function SetHue(h)
+        UICustom.AccentH = h * 360
+        ApplyAccent()
+        UpdateSelDot(h)
+        swatch.BackgroundColor3  = Colors.Accent
+        swLbl.Text               = math.floor(h * 360).."°"
+        opKnob.BackgroundColor3  = Colors.Accent
+        opFill.BackgroundColor3  = Colors.SliderFill
+        acBar.BackgroundColor3   = Colors.Accent
+    end
+
+    for _, seg in ipairs(ringSegs) do
+        local btn = Create("TextButton", {
+            Size = UDim2.new(1,0,1,0), BackgroundTransparency=1,
+            Text="", AutoButtonColor=false, ZIndex=7, Parent=seg.frame,
+        })
+        btn.MouseButton1Click:Connect(function() SetHue(seg.hue) end)
+    end
+
+    local opDrag = false
+    local function applyOp(mx)
+        local bsz = opTrack.AbsoluteSize.X
+        if bsz <= 0 then return end
+        local p = math.clamp((mx - opTrack.AbsolutePosition.X) / bsz, 0, 1)
+        UICustom.Opacity = p
+        opFill.Size      = UDim2.new(p, 0, 1, 0)
+        opKnob.Position  = UDim2.new(p, 0, 0.5, 0)
+        opValLbl.Text    = math.floor(p*100).."%"
+        if MainFrame then MainFrame.BackgroundTransparency = 1 - p end
+    end
+    opKnob.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then opDrag=true end
+    end)
+    opTrack.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then opDrag=true; applyOp(i.Position.X) end
+    end)
+    local ue2 = UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then opDrag=false end
+    end)
+    local uc2 = UserInputService.InputChanged:Connect(function(i)
+        if opDrag and i.UserInputType == Enum.UserInputType.MouseMovement then applyOp(i.Position.X) end
+    end)
+    scroll.AncestryChanged:Connect(function()
+        if not scroll.Parent then ue2:Disconnect(); uc2:Disconnect() end
+    end)
+
     resetBtn.MouseButton1Click:Connect(function()
-        UICustom.AccentH = 210
-        UICustom.AccentS = 0.75
-        UICustom.AccentV = 0.90
+        UICustom.AccentH = 215
         UICustom.Opacity = 1.0
         ApplyAccent()
-        showNotification("🎨  Colors reset to default blue theme", 2)
-        -- Rebuild tab to reflect new slider positions
-        Settings.UI.Tab = "Settings"
-        RefreshContent()
+        UpdateSelDot(215/360)
+        swatch.BackgroundColor3 = Colors.Accent
+        swLbl.Text              = "215°"
+        opFill.Size             = UDim2.new(1, 0, 1, 0)
+        opKnob.Position         = UDim2.new(1, 0, 0.5, 0)
+        opValLbl.Text           = "100%"
+        opKnob.BackgroundColor3 = Colors.Accent
+        opFill.BackgroundColor3 = Colors.SliderFill
+        acBar.BackgroundColor3  = Colors.Accent
+        showNotification("🎨  Colors reset", 2)
     end)
     resetBtn.MouseEnter:Connect(function()
-        TweenService:Create(resetBtn, TweenInfo.new(0.12),
-            {BackgroundColor3 = Color3.fromRGB(165, 195, 230)}):Play()
+        TweenService:Create(resetBtn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(22,30,55)}):Play()
     end)
     resetBtn.MouseLeave:Connect(function()
-        TweenService:Create(resetBtn, TweenInfo.new(0.12),
-            {BackgroundColor3 = Colors.Card}):Play()
+        TweenService:Create(resetBtn, TweenInfo.new(0.1), {BackgroundColor3 = Colors.Darker}):Play()
     end)
-    y = y + 44
 
-    -- ── Anti-AFK Status ─────────────────────────────────────────────────────
-    y = y + 8
-    SectionLabel("⚙️  System", y)
-    y = y + 26
+    y = y + CARD_H + 16
+
+    -- ════════════════════════════════════════════
+    -- SYSTEM — Anti-AFK status
+    -- ════════════════════════════════════════════
+    SecLabel("⚙  System", y)
+    y = y + 20
 
     local afkCard = Create("Frame", {
-        Size = UDim2.new(1, -20, 0, 62), Position = UDim2.new(0, 10, 0, y),
-        BackgroundColor3 = Colors.Card, BorderSizePixel = 0, Parent = scroll
+        Size = UDim2.new(1, -20, 0, 54),
+        Position = UDim2.new(0, 10, 0, y),
+        BackgroundColor3 = Colors.Card, BorderSizePixel = 0, Parent = scroll,
     })
     RoundCorner(afkCard, 12)
-    local afkBar = Create("Frame", {
-        Size = UDim2.new(0, 3, 1, -16), Position = UDim2.new(0, 10, 0, 8),
-        BackgroundColor3 = Colors.Accent, BorderSizePixel = 0, Parent = afkCard
-    })
-    RoundCorner(afkBar, 4)
-    Create("TextLabel", {
-        Size = UDim2.new(0, 28, 0, 28), Position = UDim2.new(0, 22, 0, 17),
-        BackgroundTransparency = 1, Text = "🛡", TextSize = 22,
-        Font = Enum.Font.GothamBold, Parent = afkCard
+    Create("Frame", {
+        Size = UDim2.new(0, 3, 1, 0), BackgroundColor3 = Colors.Accent,
+        BorderSizePixel = 0, Parent = afkCard,
     })
     Create("TextLabel", {
-        Size = UDim2.new(0, 280, 0, 20), Position = UDim2.new(0, 58, 0, 10),
-        BackgroundTransparency = 1, Text = "Anti-AFK", TextColor3 = Colors.TextMain,
-        TextSize = 13, Font = Enum.Font.GothamBold,
-        TextXAlignment = Enum.TextXAlignment.Left, Parent = afkCard
+        Size = UDim2.new(0, 26, 0, 26), Position = UDim2.new(0, 18, 0, 14),
+        BackgroundTransparency = 1, Text = "🛡", TextSize = 20,
+        Font = Enum.Font.GothamBold, Parent = afkCard,
     })
     Create("TextLabel", {
-        Size = UDim2.new(0, 280, 0, 16), Position = UDim2.new(0, 58, 0, 32),
-        BackgroundTransparency = 1, Text = "Always active — prevents AFK kick",
-        TextColor3 = Colors.TextMuted, TextSize = 11, Font = Enum.Font.Gotham,
-        TextXAlignment = Enum.TextXAlignment.Left, Parent = afkCard
+        Size = UDim2.new(0, 260, 0, 18), Position = UDim2.new(0, 52, 0, 7),
+        BackgroundTransparency = 1, Text = "Anti-AFK",
+        TextColor3 = Colors.TextMain, TextSize = 13, Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Left, Parent = afkCard,
     })
-    local pillBG = Create("Frame", {
-        Size = UDim2.new(0, 46, 0, 24), Position = UDim2.new(1, -58, 0.5, -12),
-        BackgroundColor3 = Color3.fromRGB(30, 120, 30), BorderSizePixel = 0, Parent = afkCard
-    })
-    RoundCorner(pillBG, 12)
-    local knob = Create("Frame", {
-        Size = UDim2.new(0, 18, 0, 18), Position = UDim2.new(0, 24, 0.5, -9),
-        BackgroundColor3 = Color3.fromRGB(220, 220, 220), BorderSizePixel = 0, Parent = pillBG
-    })
-    RoundCorner(knob, 9)
     Create("TextLabel", {
-        Size = UDim2.new(0, 46, 0, 14), Position = UDim2.new(1, -58, 0.5, 14),
+        Size = UDim2.new(0, 260, 0, 14), Position = UDim2.new(0, 52, 0, 27),
+        BackgroundTransparency = 1, Text = "Always active — prevents kick",
+        TextColor3 = Colors.TextMuted, TextSize = 10, Font = Enum.Font.Gotham,
+        TextXAlignment = Enum.TextXAlignment.Left, Parent = afkCard,
+    })
+    local pillBG2 = Create("Frame", {
+        Size = UDim2.new(0, 42, 0, 22), Position = UDim2.new(1, -54, 0.5, -11),
+        BackgroundColor3 = Color3.fromRGB(25, 110, 50), BorderSizePixel = 0, Parent = afkCard,
+    })
+    RoundCorner(pillBG2, 11)
+    local knob2 = Create("Frame", {
+        Size = UDim2.new(0, 16, 0, 16), Position = UDim2.new(0, 22, 0.5, -8),
+        BackgroundColor3 = Color3.fromRGB(210, 210, 210), BorderSizePixel = 0, Parent = pillBG2,
+    })
+    RoundCorner(knob2, 8)
+    Create("TextLabel", {
+        Size = UDim2.new(0, 42, 0, 12), Position = UDim2.new(1, -54, 0.5, 12),
         BackgroundTransparency = 1, Text = "ON",
-        TextColor3 = Color3.fromRGB(80, 200, 80),
-        TextSize = 10, Font = Enum.Font.GothamBold, Parent = afkCard
+        TextColor3 = Color3.fromRGB(70, 190, 70),
+        TextSize = 10, Font = Enum.Font.GothamBold, Parent = afkCard,
     })
-    y = y + 70
+    y = y + 62
 
     scroll.CanvasSize = UDim2.new(0, 0, 0, y + 12)
 end
-
 local RefreshContent
 RefreshContent = function()
     ClearContent()
@@ -2796,7 +2977,7 @@ local function BuildWindow()
 
     local MinBtn = Create("TextButton", {
         Size = UDim2.new(0, 30, 0, 30), Position = UDim2.new(1, -38, 0, 7),
-        BackgroundColor3 = Color3.fromRGB(80, 130, 200), Text = "X",
+        BackgroundColor3 = Color3.fromRGB(28, 36, 65), Text = "X",
         TextColor3 = Color3.fromRGB(140, 200, 255), TextSize = 14,
         Font = Enum.Font.GothamBold, Parent = TitleBar
     })
@@ -2809,16 +2990,16 @@ local function BuildWindow()
 
     local Sidebar = Create("Frame", {
         Size = UDim2.new(0, 70, 1, -45), Position = UDim2.new(0, 0, 0, 45),
-        BackgroundColor3 = Color3.fromRGB(155, 190, 228), BorderSizePixel = 0, Parent = MainFrame
+        BackgroundColor3 = Color3.fromRGB(12, 15, 28), BorderSizePixel = 0, Parent = MainFrame
     })
     RoundCorner(Sidebar, 16)
     Create("Frame", {
         Size = UDim2.new(0, 70, 0, 20), Position = UDim2.new(0, 0, 0, 0),
-        BackgroundColor3 = Color3.fromRGB(155, 190, 228), BorderSizePixel = 0, Parent = Sidebar
+        BackgroundColor3 = Color3.fromRGB(12, 15, 28), BorderSizePixel = 0, Parent = Sidebar
     })
     Create("Frame", {
         Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -20, 1, -20),
-        BackgroundColor3 = Color3.fromRGB(155, 190, 228), BorderSizePixel = 0, Parent = Sidebar
+        BackgroundColor3 = Color3.fromRGB(12, 15, 28), BorderSizePixel = 0, Parent = Sidebar
     })
 
     ContentFrame = Create("Frame", {
@@ -2830,10 +3011,10 @@ local function BuildWindow()
     local function SetTabVisual(active)
         for tab, btn in pairs(tabButtons) do
             if tab == active then
-                btn.BackgroundColor3 = Color3.fromRGB(120, 165, 215)
+                btn.BackgroundColor3 = Color3.fromRGB(28, 36, 65)
                 btn.TextColor3 = Colors.Accent
             else
-                btn.BackgroundColor3 = Color3.fromRGB(175, 205, 238)
+                btn.BackgroundColor3 = Color3.fromRGB(22, 28, 50)
                 btn.TextColor3 = Colors.TextMuted
             end
         end
@@ -2850,10 +3031,10 @@ local function BuildWindow()
     local tooltip = Create("TextLabel", {
         Size = UDim2.new(0, 80, 0, 26),
         Position = UDim2.new(0, 78, 0, 0),
-        BackgroundColor3 = Color3.fromRGB(195, 220, 248),
+        BackgroundColor3 = Color3.fromRGB(18, 22, 38),
         BorderSizePixel = 0,
         Text = "",
-        TextColor3 = Color3.fromRGB(10, 45, 120),
+        TextColor3 = Color3.fromRGB(185, 210, 255),
         TextSize = 13,
         Font = Enum.Font.GothamBold,
         Visible = false,
@@ -2868,7 +3049,7 @@ local function BuildWindow()
         local btn = Create("TextButton", {
             Size = UDim2.new(0, BTN_W, 0, bh),
             Position = UDim2.new(0, BTN_X, 0, posY),
-            BackgroundColor3 = Color3.fromRGB(175, 205, 238), BorderSizePixel = 0,
+            BackgroundColor3 = Color3.fromRGB(22, 28, 50), BorderSizePixel = 0,
             Text = "", TextColor3 = Colors.TextMuted, TextSize = 15,
             Font = Enum.Font.GothamBold, Parent = Sidebar
         })
