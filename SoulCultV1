@@ -1,0 +1,3075 @@
+-- SOUL CULTIVATION - ESP (AURAS + NAMES + TREASURE + ALTARS)
+-- Dark blue theme, distance slider, Players/Treasure/Altar dropdowns.
+-- Sasuke EMS Sharingan icon, Right Shift toggle, minimize notifications.
+-- Parented to PlayerGui for better compatibility with Xeno.
+
+do
+    local src = nil
+    pcall(function() src = getscriptbytecode and getscriptbytecode(script) end)
+    if not src then
+        pcall(function() src = getscriptsource and getscriptsource(script) end)
+    end
+    if not src then
+        pcall(function()
+            for _, s in ipairs(game:GetService("ScriptContext").Scripts) do
+                local ok, result = pcall(function() return getscriptbytecode(s) end)
+                if ok and result then src = result break end
+            end
+        end)
+    end
+    _G.__SoulHubSource = src
+    if src then
+        print("[SoulHub] Source stored for re-execute on teleport (" .. #src .. " bytes)")
+    else
+        print("[SoulHub] Warning: Could not store source — re-execute after rejoin unavailable")
+    end
+end
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local TweenService = game:GetService("TweenService")
+
+-- ============================================
+-- NOTIFICATION (bottom-right)
+-- ============================================
+local function showNotification(message, duration)
+    duration = duration or 2
+    local notifGui = Instance.new("ScreenGui")
+    notifGui.Name = "SoulNotif"
+    notifGui.ResetOnSpawn = false
+    notifGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    notifGui.Parent = PlayerGui
+
+    local notif = Instance.new("Frame")
+    notif.Size = UDim2.new(0, 280, 0, 52)
+    notif.Position = UDim2.new(1, -290, 1, -70)
+    notif.BackgroundColor3 = Color3.fromRGB(195, 220, 248)  -- light blue notification bg
+    notif.BackgroundTransparency = 0
+    notif.BorderSizePixel = 0
+    notif.Parent = notifGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 10)
+    corner.Parent = notif
+
+    -- Dot-corner accent marks (matches icon frame style)
+    local dotClr = Color3.fromRGB(40, 100, 195)
+    local dotSz  = 5
+    local dotPositions = {
+        UDim2.new(0, -1, 0, -1),
+        UDim2.new(1, -dotSz + 1, 0, -1),
+        UDim2.new(0, -1, 1, -dotSz + 1),
+        UDim2.new(1, -dotSz + 1, 1, -dotSz + 1),
+    }
+    for _, pos in ipairs(dotPositions) do
+        local d = Instance.new("Frame")
+        d.Size = UDim2.new(0, dotSz, 0, dotSz)
+        d.Position = pos
+        d.BackgroundColor3 = dotClr
+        d.BorderSizePixel = 0
+        d.ZIndex = 12
+        d.Parent = notif
+        local dc = Instance.new("UICorner")
+        dc.CornerRadius = UDim.new(1, 0)
+        dc.Parent = d
+    end
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(40, 100, 195)   -- dark blue border
+    stroke.Thickness = 1.5
+    stroke.Transparency = 0
+    stroke.Parent = notif
+
+    local bar = Instance.new("Frame")
+    bar.Size = UDim2.new(0, 3, 1, -16)
+    bar.Position = UDim2.new(0, 10, 0, 8)
+    bar.BackgroundColor3 = Color3.fromRGB(20, 80, 170)  -- navy accent bar
+    bar.BorderSizePixel = 0
+    bar.Parent = notif
+    local barCorner = Instance.new("UICorner")
+    barCorner.CornerRadius = UDim.new(0, 4)
+    barCorner.Parent = bar
+
+    local text = Instance.new("TextLabel")
+    text.Size = UDim2.new(1, -30, 1, 0)
+    text.Position = UDim2.new(0, 22, 0, 0)
+    text.BackgroundTransparency = 1
+    text.Text = message
+    text.TextColor3 = Color3.fromRGB(10, 45, 120)  -- dark navy text on light bg
+    text.TextTransparency = 0
+    text.TextSize = 14
+    text.Font = Enum.Font.GothamSemibold
+    text.TextWrapped = true
+    text.TextXAlignment = Enum.TextXAlignment.Left
+    text.Parent = notif
+
+    notif.Position = UDim2.new(1, 10, 1, -70)
+    TweenService:Create(notif, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
+        {Position = UDim2.new(1, -290, 1, -70)}):Play()
+
+    task.wait(duration)
+
+    TweenService:Create(notif, TweenInfo.new(0.4), {BackgroundTransparency = 1}):Play()
+    TweenService:Create(stroke, TweenInfo.new(0.4), {Transparency = 1}):Play()
+    TweenService:Create(bar, TweenInfo.new(0.4), {BackgroundTransparency = 1}):Play()
+    local textFade = TweenService:Create(text, TweenInfo.new(0.4), {TextTransparency = 1})
+    textFade:Play()
+    textFade.Completed:Connect(function() notifGui:Destroy() end)
+end
+
+-- ============================================
+-- DEBUGGING
+-- ============================================
+local function debugLog(message, isError)
+    print((isError and "[ERROR] " or "[DEBUG] ") .. message)
+end
+
+-- ============================================
+-- CLEANUP
+-- ============================================
+local Connections = {}
+
+local function CleanupLeftovers()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if root then
+        if root:FindFirstChild("SoulFarmVelocity") then root.SoulFarmVelocity:Destroy() end
+        if root:FindFirstChild("SoulFarmGyro") then root.SoulFarmGyro:Destroy() end
+    end
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        humanoid.PlatformStand = false
+        if humanoid.Sit then humanoid.Sit = false end
+    end
+end
+
+local function CleanupESP()
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local head = player.Character:FindFirstChild("Head")
+            if head then
+                for _, child in ipairs(head:GetChildren()) do
+                    if child:IsA("BillboardGui") and child.Name == "SoulESP_Name" then
+                        child:Destroy()
+                    end
+                end
+            end
+            for _, child in ipairs(player.Character:GetChildren()) do
+                if child:IsA("Highlight") and child.Name == "SoulESP_Highlight" then
+                    child:Destroy()
+                end
+            end
+        end
+    end
+end
+
+if PlayerGui:FindFirstChild("SoulHub") then
+    PlayerGui.SoulHub:Destroy()
+end
+
+CleanupLeftovers()
+
+local charAddedConn = LocalPlayer.CharacterAdded:Connect(function(char)
+    char:WaitForChild("HumanoidRootPart", 10)
+    task.wait(0.1)
+    CleanupLeftovers()
+end)
+table.insert(Connections, charAddedConn)
+
+-- ============================================
+-- THEME
+-- ============================================
+local Colors = {
+    Frame      = Color3.fromRGB(185, 215, 245),   -- light steel blue  (main window bg)
+    Darker     = Color3.fromRGB(160, 195, 230),   -- slightly darker   (title bar)
+    Card       = Color3.fromRGB(200, 225, 250),   -- soft card blue
+    Accent     = Color3.fromRGB(20,  80,  170),   -- deep navy accent
+    TextMain   = Color3.fromRGB(10,  45,  120),   -- dark navy text
+    TextMuted  = Color3.fromRGB(40,  90,  160),   -- mid-blue muted text
+    Border     = Color3.fromRGB(60,  120, 190),   -- medium-dark blue border
+    ToggleOn   = Color3.fromRGB(20,  80,  170),   -- navy toggle active
+    ToggleOff  = Color3.fromRGB(140, 180, 220),   -- pale blue toggle off
+    SliderBG   = Color3.fromRGB(160, 195, 230),   -- slider track
+    SliderFill = Color3.fromRGB(20,  80,  170),   -- slider fill navy
+}
+
+-- UI Customization settings (live-editable)
+local UICustom = {
+    AccentH  = 215,   -- hue 0-360  (215 = light-blue family)
+    AccentS  = 0.88,  -- saturation
+    AccentV  = 0.67,  -- value (dark enough for text on light bg)
+    BgH      = 210,   -- background hue
+    BgS      = 0.40,  -- background saturation (pastel)
+    BgV      = 0.96,  -- background value (near-white)
+    Opacity  = 1.0,
+}
+
+local function ApplyAccent()
+    -- Dark navy accent for text / toggles / fills
+    local acc = Color3.fromHSV(UICustom.AccentH/360, UICustom.AccentS, UICustom.AccentV)
+    Colors.Accent     = acc
+    Colors.ToggleOn   = acc
+    Colors.SliderFill = acc
+    Colors.TextMain   = Color3.fromHSV(UICustom.AccentH/360, 0.92, UICustom.AccentV * 0.75)
+    Colors.TextMuted  = Color3.fromHSV(UICustom.AccentH/360, 0.70, UICustom.AccentV * 0.90)
+    Colors.Border     = Color3.fromHSV(UICustom.AccentH/360, 0.60, UICustom.AccentV * 1.0)
+    -- Light pastel background
+    Colors.Frame      = Color3.fromHSV(UICustom.BgH/360, UICustom.BgS, UICustom.BgV)
+    Colors.Darker     = Color3.fromHSV(UICustom.BgH/360, UICustom.BgS + 0.08, UICustom.BgV - 0.08)
+    Colors.Card       = Color3.fromHSV(UICustom.BgH/360, UICustom.BgS - 0.05, UICustom.BgV + 0.02)
+    Colors.ToggleOff  = Color3.fromHSV(UICustom.BgH/360, UICustom.BgS + 0.10, UICustom.BgV - 0.15)
+    Colors.SliderBG   = Color3.fromHSV(UICustom.BgH/360, UICustom.BgS + 0.05, UICustom.BgV - 0.10)
+    if MainFrame then
+        MainFrame.BackgroundTransparency = 1 - UICustom.Opacity
+    end
+end
+
+-- ============================================
+-- SETTINGS
+-- ============================================
+local Settings = {
+    UI = {
+        Visible = true,
+        Tab = "Home",
+    },
+    ESP = {
+        Enabled = true,
+        Distance = 1000,
+        Auras = true,
+        Names = true,
+    },
+    Treasure = {
+        Common   = { Enabled = false },
+        Rare     = { Enabled = false },
+        VeryRare = { Enabled = false },
+        Lost     = { Enabled = false },
+    },
+    Altar = {
+        Grade1 = { Enabled = false },
+        Grade2 = { Enabled = false },
+        Grade3 = { Enabled = false },
+        Grade4 = { Enabled = false },
+        Grade5 = { Enabled = false },
+    },
+}
+
+-- ============================================
+-- TREASURE TIER CONFIG
+-- ============================================
+local TreasureTiers = {
+    { key = "Common",   label = "Common Treasure",    fill = Color3.fromRGB(180,180,180), outline = Color3.fromRGB(255,255,255), textColor = Color3.fromRGB(220,220,220) },
+    { key = "Rare",     label = "Rare Treasure",      fill = Color3.fromRGB(30,80,200),   outline = Color3.fromRGB(80,160,255),  textColor = Color3.fromRGB(80,160,255)  },
+    { key = "VeryRare", label = "Very Rare Treasure", fill = Color3.fromRGB(120,0,200),   outline = Color3.fromRGB(200,100,255), textColor = Color3.fromRGB(200,100,255) },
+    { key = "Lost",     label = "Lost Treasure",      fill = Color3.fromRGB(180,60,0),    outline = Color3.fromRGB(255,140,0),   textColor = Color3.fromRGB(255,180,50)  },
+}
+
+-- ============================================
+-- ALTAR GRADE CONFIG
+-- ============================================
+local AltarGrades = {
+    {
+        key = "Grade1", label = "Grade 1 Altar",
+        fill      = Color3.fromRGB(220,220,220),
+        outline   = Color3.fromRGB(255,255,255),
+        textColor = Color3.fromRGB(230,230,230),
+    },
+    {
+        key = "Grade2", label = "Grade 2 Altar",
+        fill      = Color3.fromRGB(230,200,60),
+        outline   = Color3.fromRGB(255,230,80),
+        textColor = Color3.fromRGB(255,235,100),
+    },
+    {
+        key = "Grade3", label = "Grade 3 Altar",
+        fill      = Color3.fromRGB(220,120,20),
+        outline   = Color3.fromRGB(255,160,40),
+        textColor = Color3.fromRGB(255,170,60),
+    },
+    {
+        key = "Grade4", label = "Grade 4 Altar",
+        fill      = Color3.fromRGB(200,40,20),
+        outline   = Color3.fromRGB(255,70,50),
+        textColor = Color3.fromRGB(255,90,70),
+    },
+    {
+        key = "Grade5", label = "Grade 5 Altar",
+        fill      = Color3.fromRGB(150,0,30),
+        outline   = Color3.fromRGB(220,20,60),
+        textColor = Color3.fromRGB(255,50,80),
+    },
+}
+
+local ALTAR_ACCENT = Color3.fromRGB(220, 80, 50)
+
+-- ============================================
+-- TREASURE NAME DETECTION
+-- ============================================
+local TreasurePatterns = {
+    Common   = { "common" },
+    Rare     = { "rare" },
+    VeryRare = { "veryrare", "very rare", "very_rare" },
+    Lost     = { "lost" },
+}
+local TREASURE_PRIORITY = { "VeryRare", "Lost", "Rare", "Common" }
+
+local function GetTreasureTierForName(name)
+    local lower = name:lower()
+    for _, tierKey in ipairs(TREASURE_PRIORITY) do
+        local pats = TreasurePatterns[tierKey]
+        if pats then
+            for _, p in ipairs(pats) do
+                if lower:find(p, 1, true) then return tierKey end
+            end
+        end
+    end
+    return nil
+end
+
+-- ============================================
+-- ALTAR NAME DETECTION
+-- ============================================
+local ALTAR_KEYWORDS = { "altar" }
+
+local function GetAltarGradeForName(name)
+    local lower = name:lower()
+
+    local hasAltar = false
+    for _, kw in ipairs(ALTAR_KEYWORDS) do
+        if lower:find(kw, 1, true) then
+            hasAltar = true
+            break
+        end
+    end
+    if not hasAltar then return nil end
+
+    local grade = nil
+
+    local g = lower:match("grade[_%s%-]*([1-5])")
+    if g then grade = tonumber(g) end
+
+    if not grade then
+        g = lower:match("altar[_%s%-]*([1-5])")
+        if g then grade = tonumber(g) end
+    end
+
+    if not grade then
+        g = lower:match("([1-5])")
+        if g then grade = tonumber(g) end
+    end
+
+    if grade and grade >= 1 and grade <= 5 then
+        return "Grade" .. grade
+    end
+
+    return "Grade1"
+end
+
+-- ============================================
+-- SHARED ESP FOLDER IN WORKSPACE
+-- ============================================
+local function GetOrCreateFolder(name)
+    local f = workspace:FindFirstChild(name)
+    if not f then
+        f = Instance.new("Folder")
+        f.Name = name
+        f.Parent = workspace
+    end
+    return f
+end
+
+local TreasureHLFolder = GetOrCreateFolder("_SoulESP_Treasure")
+local AltarHLFolder    = GetOrCreateFolder("_SoulESP_Altars")
+
+-- ============================================
+-- GENERIC WORLD-OBJECT ESP HELPERS
+-- ============================================
+local function GetTreasureTierConfig(key)
+    for _, t in ipairs(TreasureTiers) do
+        if t.key == key then return t end
+    end
+end
+
+local function GetAltarGradeConfig(key)
+    for _, g in ipairs(AltarGrades) do
+        if g.key == key then return g end
+    end
+end
+
+local function CreateWorldESP(part, cfg, hlFolder, billboardOffset)
+    billboardOffset = billboardOffset or Vector3.new(0, 4, 0)
+
+    local data = {}
+
+    local adornTarget = part
+    if part.Parent and part.Parent:IsA("Model") then
+        adornTarget = part.Parent
+    end
+
+    local hl = Instance.new("Highlight")
+    hl.FillColor = cfg.fill
+    hl.OutlineColor = cfg.outline
+    hl.FillTransparency = 0.4
+    hl.OutlineTransparency = 0
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Adornee = adornTarget
+    hl.Parent = hlFolder
+    data.Highlight = hl
+
+    local bb = Instance.new("BillboardGui")
+    bb.Size = UDim2.new(0, 240, 0, 42)
+    bb.StudsOffset = billboardOffset
+    bb.AlwaysOnTop = true
+    bb.LightInfluence = 0
+    bb.Parent = part
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = cfg.label .. " [0m]"
+    lbl.TextColor3 = cfg.textColor
+    lbl.TextStrokeColor3 = Color3.new(0, 0, 0)
+    lbl.TextStrokeTransparency = 0
+    lbl.TextSize = 13
+    lbl.Font = Enum.Font.GothamBold
+    lbl.Parent = bb
+    data.Billboard = bb
+    data.Label = lbl
+
+    return data
+end
+
+-- ============================================
+-- TREASURE ESP SYSTEM
+-- ============================================
+local TreasureESP = {}
+
+local function CreateTreasureESP(part, tierKey)
+    if TreasureESP[part] then return end
+    local cfg = GetTreasureTierConfig(tierKey)
+    if not cfg then return end
+
+    local data = CreateWorldESP(part, cfg, TreasureHLFolder)
+    data.tier = tierKey
+    TreasureESP[part] = data
+
+    debugLog("Treasure ESP: " .. part.Name .. " [" .. tierKey .. "]")
+
+    part.AncestryChanged:Connect(function()
+        if not part.Parent then
+            if data.Highlight and data.Highlight.Parent then data.Highlight:Destroy() end
+            if data.Billboard and data.Billboard.Parent then data.Billboard:Destroy() end
+            TreasureESP[part] = nil
+        end
+    end)
+end
+
+local function RemoveTreasureESP(part)
+    local d = TreasureESP[part]
+    if d then
+        if d.Highlight and d.Highlight.Parent then d.Highlight:Destroy() end
+        if d.Billboard and d.Billboard.Parent then d.Billboard:Destroy() end
+        TreasureESP[part] = nil
+    end
+end
+
+-- ============================================
+-- ALTAR ESP SYSTEM
+-- ============================================
+local AltarESP = {}
+
+local function CreateAltarESP(part, gradeKey)
+    if AltarESP[part] then return end
+    local cfg = GetAltarGradeConfig(gradeKey)
+    if not cfg then return end
+
+    local data = CreateWorldESP(part, cfg, AltarHLFolder, Vector3.new(0, 6, 0))
+    data.grade = gradeKey
+    AltarESP[part] = data
+
+    debugLog("Altar ESP: " .. part.Name .. " [" .. gradeKey .. "]")
+
+    part.AncestryChanged:Connect(function()
+        if not part.Parent then
+            if data.Highlight and data.Highlight.Parent then data.Highlight:Destroy() end
+            if data.Billboard and data.Billboard.Parent then data.Billboard:Destroy() end
+            AltarESP[part] = nil
+        end
+    end)
+end
+
+local function RemoveAltarESP(part)
+    local d = AltarESP[part]
+    if d then
+        if d.Highlight and d.Highlight.Parent then d.Highlight:Destroy() end
+        if d.Billboard and d.Billboard.Parent then d.Billboard:Destroy() end
+        AltarESP[part] = nil
+    end
+end
+
+-- ============================================
+-- SCANNER
+-- ============================================
+local function tryRegisterObject(obj)
+    if not (obj:IsA("BasePart") or obj:IsA("Model")) then return end
+
+    local tierKey = GetTreasureTierForName(obj.Name)
+    if tierKey then
+        if obj:IsA("BasePart") then
+            CreateTreasureESP(obj, tierKey)
+        elseif obj:IsA("Model") then
+            local root = obj.PrimaryPart or obj:FindFirstChildOfClass("BasePart")
+            if root then
+                CreateTreasureESP(root, tierKey)
+            else
+                task.spawn(function()
+                    task.wait(0.5)
+                    if not obj.Parent then return end
+                    local r = obj.PrimaryPart or obj:FindFirstChildOfClass("BasePart")
+                    if r then CreateTreasureESP(r, tierKey) end
+                end)
+            end
+        end
+        return
+    end
+
+    local gradeKey = GetAltarGradeForName(obj.Name)
+    if gradeKey then
+        if obj:IsA("BasePart") then
+            CreateAltarESP(obj, gradeKey)
+        elseif obj:IsA("Model") then
+            local root = obj.PrimaryPart or obj:FindFirstChildOfClass("BasePart")
+            if root then
+                CreateAltarESP(root, gradeKey)
+            else
+                task.spawn(function()
+                    task.wait(0.5)
+                    if not obj.Parent then return end
+                    local r = obj.PrimaryPart or obj:FindFirstChildOfClass("BasePart")
+                    if r then CreateAltarESP(r, gradeKey) end
+                end)
+            end
+        end
+    end
+end
+
+local function ScanWorkspace()
+    local descendants = workspace:GetDescendants()
+    debugLog("Scanning " .. #descendants .. " workspace descendants for treasure & altars")
+    local tFound, aFound = 0, 0
+
+    for _, obj in ipairs(descendants) do
+        if obj:IsA("BasePart") or obj:IsA("Model") then
+            if GetTreasureTierForName(obj.Name) then
+                tFound = tFound + 1
+                tryRegisterObject(obj)
+            elseif GetAltarGradeForName(obj.Name) then
+                aFound = aFound + 1
+                tryRegisterObject(obj)
+            end
+        end
+    end
+
+    debugLog("Scan complete — Treasure: " .. tFound .. "  Altars: " .. aFound)
+
+    local conn = workspace.DescendantAdded:Connect(function(obj)
+        task.wait(0.15)
+        tryRegisterObject(obj)
+    end)
+    table.insert(Connections, conn)
+end
+
+-- ============================================
+-- UPDATE LOOPS
+-- ============================================
+local function UpdateTreasureESP()
+    local localChar = LocalPlayer.Character
+    local localRoot = localChar and localChar:FindFirstChild("HumanoidRootPart")
+    if not localRoot then return end
+    local myPos = localRoot.Position
+
+    for part, data in pairs(TreasureESP) do
+        if part and part.Parent then
+            local tierSettings = Settings.Treasure[data.tier]
+            local dist = (myPos - part.Position).Magnitude
+            local show = tierSettings and tierSettings.Enabled and dist <= Settings.ESP.Distance
+
+            if data.Highlight then data.Highlight.Enabled = show end
+            if data.Billboard then
+                data.Billboard.Enabled = show
+                if show and data.Label then
+                    local cfg = GetTreasureTierConfig(data.tier)
+                    data.Label.Text = (cfg and cfg.label or data.tier) .. " [" .. math.floor(dist) .. "m]"
+                    if cfg then data.Label.TextColor3 = cfg.textColor end
+                end
+            end
+        else
+            RemoveTreasureESP(part)
+        end
+    end
+end
+
+local function UpdateAltarESP()
+    local localChar = LocalPlayer.Character
+    local localRoot = localChar and localChar:FindFirstChild("HumanoidRootPart")
+    if not localRoot then return end
+    local myPos = localRoot.Position
+
+    for part, data in pairs(AltarESP) do
+        if part and part.Parent then
+            local gradeSettings = Settings.Altar[data.grade]
+            local dist = (myPos - part.Position).Magnitude
+            local show = gradeSettings and gradeSettings.Enabled and dist <= Settings.ESP.Distance
+
+            if data.Highlight then data.Highlight.Enabled = show end
+            if data.Billboard then
+                data.Billboard.Enabled = show
+                if show and data.Label then
+                    local cfg = GetAltarGradeConfig(data.grade)
+                    data.Label.Text = (cfg and cfg.label or data.grade) .. " [" .. math.floor(dist) .. "m]"
+                    if cfg then data.Label.TextColor3 = cfg.textColor end
+                end
+            end
+        else
+            RemoveAltarESP(part)
+        end
+    end
+end
+
+-- ============================================
+-- PLAYER ESP SYSTEM
+-- ============================================
+local ESPPlayers = {}
+
+local function GetPlayerColor(player)
+    local team = player.Team
+    if team then
+        local success, color = pcall(function() return team.Color end)
+        if success and color then return color end
+    end
+    return Color3.fromRGB(60, 140, 230)
+end
+
+local function CreatePlayerESP(player)
+    if player == LocalPlayer then return end
+    if ESPPlayers[player] then return end
+    local character = player.Character
+    if not character then return end
+
+    local head = character:FindFirstChild("Head")
+    local root = character:FindFirstChild("HumanoidRootPart")
+    local attempts = 0
+    while (not head or not root) and attempts < 10 do
+        task.wait(0.5)
+        if not character or not character.Parent then return end
+        head = head or character:FindFirstChild("Head")
+        root = root or character:FindFirstChild("HumanoidRootPart")
+        attempts = attempts + 1
+    end
+    if not head or not root then
+        debugLog("Failed to find head/root for " .. player.Name, true)
+        return
+    end
+
+    debugLog("Creating player ESP for " .. player.Name)
+
+    local espData = { Player = player, Highlight = nil, NameBillboard = nil }
+
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "SoulESP_Highlight"
+    highlight.FillColor = GetPlayerColor(player):Lerp(Color3.new(0,0,0), 0.5)
+    highlight.OutlineColor = GetPlayerColor(player)
+    highlight.FillTransparency = 0.5
+    highlight.OutlineTransparency = 0
+    pcall(function() highlight.OutlineThickness = 2 end)
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Adornee = character
+    highlight.Parent = character
+    espData.Highlight = highlight
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "SoulESP_Name"
+    billboard.Size = UDim2.new(0, 200, 0, 40)
+    billboard.StudsOffset = Vector3.new(0, 3, 0)
+    billboard.AlwaysOnTop = true
+    billboard.LightInfluence = 0
+    billboard.Parent = head
+
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(1, 0, 1, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Text = player.Name .. " [0m]"
+    nameLabel.TextColor3 = Color3.fromRGB(0, 0, 0)
+    nameLabel.TextStrokeColor3 = Color3.fromRGB(60, 140, 230)
+    nameLabel.TextStrokeTransparency = 0
+    nameLabel.TextSize = 14
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.Parent = billboard
+    espData.NameBillboard = billboard
+    espData.NameLabel = nameLabel
+    espData.Head = head
+    espData.Root = root
+
+    ESPPlayers[player] = espData
+    debugLog("Player ESP created for " .. player.Name)
+end
+
+local function RemovePlayerESP(player)
+    local esp = ESPPlayers[player]
+    if esp then
+        if esp.Highlight then esp.Highlight:Destroy() end
+        if esp.NameBillboard then esp.NameBillboard:Destroy() end
+        ESPPlayers[player] = nil
+        debugLog("Player ESP removed for " .. player.Name)
+    end
+end
+
+local function UpdatePlayerESP()
+    local localChar = LocalPlayer.Character
+    local localRoot = localChar and localChar:FindFirstChild("HumanoidRootPart")
+    if not localRoot then return end
+    local myPos = localRoot.Position
+
+    for player, esp in pairs(ESPPlayers) do
+        if player.Character and player.Character.Parent then
+            local root = esp.Root or player.Character:FindFirstChild("HumanoidRootPart")
+            if root and root.Parent then
+                esp.Root = root
+                local dist = (myPos - root.Position).Magnitude
+                local show = Settings.ESP.Enabled and dist <= Settings.ESP.Distance
+
+                if esp.Highlight then
+                    esp.Highlight.Enabled = show and Settings.ESP.Auras
+                end
+                if esp.NameBillboard then
+                    local showName = show and Settings.ESP.Names
+                    esp.NameBillboard.Enabled = showName
+                    if showName and esp.NameLabel then
+                        esp.NameLabel.Text = player.Name .. " [" .. math.floor(dist) .. "m]"
+                    end
+                end
+            else
+                RemovePlayerESP(player)
+                task.spawn(function()
+                    task.wait(1)
+                    if player.Character and player.Character.Parent then
+                        CreatePlayerESP(player)
+                    end
+                end)
+            end
+        else
+            RemovePlayerESP(player)
+        end
+    end
+end
+
+local function OnPlayerAdded(player)
+    if player == LocalPlayer then return end
+    task.spawn(function()
+        if not player.Character then player.CharacterAdded:Wait() end
+        task.wait(1)
+        if player.Character and player.Character.Parent then
+            CreatePlayerESP(player)
+        end
+    end)
+    player.CharacterAdded:Connect(function(character)
+        task.spawn(function()
+            RemovePlayerESP(player)
+            task.wait(1)
+            if character and character.Parent then
+                CreatePlayerESP(player)
+            end
+        end)
+    end)
+end
+
+local function OnPlayerRemoving(player)
+    RemovePlayerESP(player)
+end
+
+local function InitializeESP()
+    task.spawn(function()
+        task.wait(5)
+        debugLog("Initializing player ESP")
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer and p.Character and p.Character.Parent then
+                CreatePlayerESP(p)
+            end
+        end
+        debugLog("Starting world object scan")
+        ScanWorkspace()
+    end)
+end
+
+local function StartESPUpdates()
+    local ESPTickRate = 0.1
+    local lastESPTick = 0
+    local conn = RunService.Heartbeat:Connect(function()
+        local now = tick()
+        if now - lastESPTick < ESPTickRate then return end
+        lastESPTick = now
+        UpdatePlayerESP()
+        UpdateTreasureESP()
+        UpdateAltarESP()
+    end)
+    table.insert(Connections, conn)
+    debugLog("ESP update loop started (10Hz throttle)")
+end
+
+-- ============================================
+-- UI HELPERS
+-- ============================================
+local function Create(className, props)
+    local obj = Instance.new(className)
+    for k, v in pairs(props) do obj[k] = v end
+    return obj
+end
+
+local function RoundCorner(parent, radius)
+    return Create("UICorner", {CornerRadius = UDim.new(0, radius), Parent = parent})
+end
+
+local function Stroke(parent, color, thickness)
+    return Create("UIStroke", {Color = color, Thickness = thickness or 1, Parent = parent})
+end
+
+local ScreenGui, MainFrame, ContentFrame, TitleBar
+
+local function ClearContent()
+    if ContentFrame then ContentFrame:ClearAllChildren() end
+end
+
+-- ============================================
+-- TAB ICON ASSET IDs
+-- ============================================
+local ICON_HOME    = "rbxassetid://130920309508459"
+local ICON_ESP     = "rbxassetid://74373794162555"
+local ICON_FARMING = "rbxassetid://113977003779500"
+
+-- ============================================
+-- SHARED ICON FRAME BUILDER
+-- Creates the dot-corner framed background used by all tab icons.
+-- ============================================
+local ICON_BORDER  = Color3.fromRGB(40, 100, 200)
+local ICON_DOT_CLR = Color3.fromRGB(90, 180, 255)
+local ICON_BG      = Color3.fromRGB(140, 180, 220)
+local ICON_DOT_SZ  = 4
+local ICON_CORN_R  = 10
+
+local function BuildIconFrame(parent)
+    local bg = Create("Frame", {
+        Size             = UDim2.new(1, 0, 1, 0),
+        Position         = UDim2.new(0, 0, 0, 0),
+        BackgroundColor3 = ICON_BG,
+        BorderSizePixel  = 0,
+        ZIndex           = 2,
+        Parent           = parent,
+    })
+    RoundCorner(bg, ICON_CORN_R)
+    local border = Create("Frame", {
+        Size                   = UDim2.new(1, 0, 1, 0),
+        Position               = UDim2.new(0, 0, 0, 0),
+        BackgroundTransparency = 1,
+        BorderSizePixel        = 0,
+        ZIndex                 = 4,
+        Parent                 = parent,
+    })
+    RoundCorner(border, ICON_CORN_R)
+    Stroke(border, ICON_BORDER, 1.5)
+    local half = ICON_DOT_SZ / 2
+    local dotPositions = {
+        UDim2.new(0, -half, 0, -half),
+        UDim2.new(1, -half, 0, -half),
+        UDim2.new(0, -half, 1, -half),
+        UDim2.new(1, -half, 1, -half),
+    }
+    for _, pos in ipairs(dotPositions) do
+        local dot = Create("Frame", {
+            Size             = UDim2.new(0, ICON_DOT_SZ, 0, ICON_DOT_SZ),
+            Position         = pos,
+            BackgroundColor3 = ICON_DOT_CLR,
+            BorderSizePixel  = 0,
+            ZIndex           = 5,
+            Parent           = parent,
+        })
+        RoundCorner(dot, 999)
+    end
+    return bg
+end
+
+local function BuildImageIcon(parent, assetId)
+    local bg = BuildIconFrame(parent)
+    bg.ClipsDescendants = true
+    Create("ImageLabel", {
+        Size                   = UDim2.new(1, 0, 1, 0),
+        Position               = UDim2.new(0, 0, 0, 0),
+        BackgroundTransparency = 1,
+        Image                  = assetId,
+        ScaleType              = Enum.ScaleType.Crop,
+        ZIndex                 = 3,
+        Parent                 = bg,
+    })
+    return bg
+end
+
+local function BuildFittedIcon(parent, assetId)
+    local bg = BuildIconFrame(parent)
+    bg.ClipsDescendants = true
+    Create("ImageLabel", {
+        Size                   = UDim2.new(1, 0, 1, 0),
+        Position               = UDim2.new(0, 0, 0, 0),
+        BackgroundTransparency = 1,
+        Image                  = assetId,
+        ScaleType              = Enum.ScaleType.Fit,
+        ZIndex                 = 3,
+        Parent                 = bg,
+    })
+    return bg
+end
+
+-- ============================================
+-- S3: SLIDERS icon  (Settings tab)
+-- Three horizontal tracks with staggered knobs
+-- ============================================
+local function BuildSettingsSlidersIcon(parent)
+    local bg = BuildIconFrame(parent)
+    local C  = Color3.fromRGB(90, 180, 255)
+    local W  = 56
+    local H  = 46
+    local tracks = {
+        { y = math.floor(H * 0.28), knobX = math.floor(W * 0.32) },
+        { y = math.floor(H * 0.52), knobX = math.floor(W * 0.60) },
+        { y = math.floor(H * 0.76), knobX = math.floor(W * 0.44) },
+    }
+    local lineX0, lineX1 = math.floor(W * 0.13), math.floor(W * 0.87)
+    local trackH, knobR  = 2, 4
+    for _, t in ipairs(tracks) do
+        local track = Create("Frame", {
+            Size             = UDim2.new(0, lineX1 - lineX0, 0, trackH),
+            Position         = UDim2.new(0, lineX0, 0, t.y - 1),
+            BackgroundColor3 = Color3.fromRGB(25, 55, 105),
+            BorderSizePixel  = 0, ZIndex = 3, Parent = bg,
+        })
+        RoundCorner(track, 2)
+        local fill = Create("Frame", {
+            Size             = UDim2.new(0, t.knobX - lineX0, 0, trackH),
+            Position         = UDim2.new(0, lineX0, 0, t.y - 1),
+            BackgroundColor3 = C,
+            BorderSizePixel  = 0, ZIndex = 4, Parent = bg,
+        })
+        RoundCorner(fill, 2)
+        local knob = Create("Frame", {
+            Size             = UDim2.new(0, knobR * 2, 0, knobR * 2),
+            Position         = UDim2.new(0, t.knobX - knobR, 0, t.y - knobR),
+            BackgroundColor3 = C,
+            BorderSizePixel  = 0, ZIndex = 5, Parent = bg,
+        })
+        RoundCorner(knob, 999)
+        local inner = Create("Frame", {
+            Size             = UDim2.new(0, knobR, 0, knobR),
+            Position         = UDim2.new(0, t.knobX - knobR / 2, 0, t.y - knobR / 2),
+            BackgroundColor3 = Color3.fromRGB(180, 225, 255),
+            BorderSizePixel  = 0, ZIndex = 6, Parent = bg,
+        })
+        RoundCorner(inner, 999)
+    end
+    return bg
+end
+
+-- ============================================
+-- N4: MESSAGE DOTS icon  (Notifications tab)
+-- Speech bubble with three dot indicators + tail
+-- ============================================
+local function BuildNotifMessageIcon(parent)
+    local bg = BuildIconFrame(parent)
+    local C  = Color3.fromRGB(90, 180, 255)
+    local W  = 56
+    local H  = 46
+    local bW, bH = 34, 22
+    local bX = math.floor((W - bW) / 2)
+    local bY = math.floor(H * 0.10)
+    local bubble = Create("Frame", {
+        Size             = UDim2.new(0, bW, 0, bH),
+        Position         = UDim2.new(0, bX, 0, bY),
+        BackgroundColor3 = Color3.fromRGB(15, 45, 95),
+        BorderSizePixel  = 0, ZIndex = 3, Parent = bg,
+    })
+    RoundCorner(bubble, 6)
+    Stroke(bubble, C, 1.2)
+    local dSz  = 4
+    local dGap = 5
+    local totalW = 3 * dSz + 2 * dGap
+    local dX0 = math.floor((bW - totalW) / 2)
+    local dY0 = math.floor(bH / 2 - dSz / 2)
+    for i = 0, 2 do
+        local dot = Create("Frame", {
+            Size             = UDim2.new(0, dSz, 0, dSz),
+            Position         = UDim2.new(0, dX0 + i * (dSz + dGap), 0, dY0),
+            BackgroundColor3 = C,
+            BorderSizePixel  = 0, ZIndex = 4, Parent = bubble,
+        })
+        RoundCorner(dot, 999)
+    end
+    -- Tail: small downward pointer bottom-left of bubble
+    local tailW, tailH = 7, 6
+    local tail = Create("Frame", {
+        Size             = UDim2.new(0, tailW, 0, tailH),
+        Position         = UDim2.new(0, bX + 5, 0, bY + bH - 1),
+        BackgroundColor3 = Color3.fromRGB(15, 45, 95),
+        BorderSizePixel  = 0, ZIndex = 3, Parent = bg,
+    })
+    RoundCorner(tail, 2)
+    -- Cover seam between tail and bubble body
+    Create("Frame", {
+        Size             = UDim2.new(0, tailW - 2, 0, 3),
+        Position         = UDim2.new(0, bX + 6, 0, bY + bH - 2),
+        BackgroundColor3 = Color3.fromRGB(15, 45, 95),
+        BorderSizePixel  = 0, ZIndex = 5, Parent = bg,
+    })
+    return bg
+end
+
+-- ============================================
+-- TAB CONTENT
+-- ============================================
+local function CreateHomeTab()
+    local y = 16
+    Create("TextLabel", {
+        Size = UDim2.new(1, -20, 0, 24), Position = UDim2.new(0, 12, 0, y),
+        BackgroundTransparency = 1, Text = "Soul Cultivation", TextColor3 = Colors.TextMain,
+        TextSize = 18, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = ContentFrame
+    })
+
+    local card = Create("Frame", {
+        Size = UDim2.new(1, -20, 0, 50), Position = UDim2.new(0, 12, 0, y+35),
+        BackgroundColor3 = Colors.Card, BorderSizePixel = 0, Parent = ContentFrame
+    })
+    RoundCorner(card, 12)
+    Create("TextLabel", {
+        Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(0, 12, 0, 13),
+        BackgroundTransparency = 1, Text = "👥", TextColor3 = Colors.Accent, TextSize = 20,
+        Font = Enum.Font.GothamBold, Parent = card
+    })
+    Create("TextLabel", {
+        Size = UDim2.new(0, 150, 0, 20), Position = UDim2.new(0, 44, 0, 8),
+        BackgroundTransparency = 1, Text = "Players In Session", TextColor3 = Colors.TextMuted,
+        TextSize = 12, Font = Enum.Font.GothamSemibold, TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = card
+    })
+    local playerCount = Create("TextLabel", {
+        Size = UDim2.new(0, 100, 0, 24), Position = UDim2.new(0, 44, 0, 26),
+        BackgroundTransparency = 1, Text = "0", TextColor3 = Colors.TextMain,
+        TextSize = 22, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = card
+    })
+
+    task.spawn(function()
+        while playerCount and playerCount.Parent do
+            if Settings.UI.Tab == "Home" then
+                playerCount.Text = tostring(#Players:GetPlayers())
+            end
+            task.wait(1)
+        end
+    end)
+
+    local rejoinBtn = Create("TextButton", {
+        Size = UDim2.new(1, -20, 0, 44), Position = UDim2.new(0, 12, 0, y+100),
+        BackgroundColor3 = Colors.Card, BorderSizePixel = 0,
+        Text = "", AutoButtonColor = false, Parent = ContentFrame
+    })
+    RoundCorner(rejoinBtn, 12)
+
+    local accentBar = Create("Frame", {
+        Size = UDim2.new(0, 3, 1, -16), Position = UDim2.new(0, 10, 0, 8),
+        BackgroundColor3 = Colors.Accent, BorderSizePixel = 0, Parent = rejoinBtn
+    })
+    RoundCorner(accentBar, 6)
+
+    Create("TextLabel", {
+        Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(0, 22, 0, 10),
+        BackgroundTransparency = 1, Text = "🔄", TextSize = 18,
+        Font = Enum.Font.GothamBold, Parent = rejoinBtn
+    })
+    Create("TextLabel", {
+        Size = UDim2.new(0, 160, 0, 18), Position = UDim2.new(0, 52, 0, 6),
+        BackgroundTransparency = 1, Text = "Rejoin Session", TextColor3 = Colors.TextMain,
+        TextSize = 13, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = rejoinBtn
+    })
+    Create("TextLabel", {
+        Size = UDim2.new(0, 200, 0, 16), Position = UDim2.new(0, 52, 0, 24),
+        BackgroundTransparency = 1, Text = "Reconnect to current server", TextColor3 = Colors.TextMuted,
+        TextSize = 11, Font = Enum.Font.Gotham, TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = rejoinBtn
+    })
+
+    rejoinBtn.MouseEnter:Connect(function()
+        TweenService:Create(rejoinBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(168, 200, 235)}):Play()
+    end)
+    rejoinBtn.MouseLeave:Connect(function()
+        TweenService:Create(rejoinBtn, TweenInfo.new(0.15), {BackgroundColor3 = Colors.Card}):Play()
+    end)
+
+    rejoinBtn.MouseButton1Click:Connect(function()
+        local TeleportService = game:GetService("TeleportService")
+        local placeId = game.PlaceId
+        local jobId = game.JobId
+
+        local queued = false
+        local src = _G.__SoulHubSource
+        if src then
+            if queue_on_teleport then
+                pcall(queue_on_teleport, src); queued = true
+            elseif syn and syn.queue_on_teleport then
+                pcall(syn.queue_on_teleport, src); queued = true
+            elseif run_on_teleport then
+                pcall(run_on_teleport, src); queued = true
+            end
+        end
+
+        showNotification(queued and "🔄  Rejoining — script will re-execute automatically"
+            or "🔄  Rejoining session...", 3)
+
+        task.wait(0.5)
+        local success, err = pcall(function()
+            TeleportService:TeleportToPlaceInstance(placeId, jobId, LocalPlayer)
+        end)
+        if not success then
+            showNotification("❌  Rejoin failed: " .. tostring(err), 3)
+            debugLog("Rejoin failed: " .. tostring(err), true)
+        end
+    end)
+end
+
+local function CreateESPTab()
+    local scroll = Create("ScrollingFrame", {
+        Size = UDim2.new(1, -8, 1, -8), Position = UDim2.new(0, 4, 0, 4),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4,
+        CanvasSize = UDim2.new(0, 0, 0, 0), Parent = ContentFrame
+    })
+
+    local y = 10
+
+    Create("TextLabel", {
+        Size = UDim2.new(1, -20, 0, 20), Position = UDim2.new(0, 10, 0, y),
+        BackgroundTransparency = 1, Text = "ESP Settings", TextColor3 = Colors.TextMain,
+        TextSize = 14, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = scroll
+    })
+    y = y + 30
+
+    local sliderFrame = Create("Frame", {
+        Size = UDim2.new(1, -20, 0, 70), Position = UDim2.new(0, 10, 0, y),
+        BackgroundColor3 = Colors.Card, BorderSizePixel = 0, Parent = scroll
+    })
+    RoundCorner(sliderFrame, 12)
+    Create("Frame", {Size = UDim2.new(0, 3, 1, 0), BackgroundColor3 = Colors.Accent,
+        BorderSizePixel = 0, Parent = sliderFrame})
+    Create("TextLabel", {
+        Size = UDim2.new(1, -80, 0, 20), Position = UDim2.new(0, 14, 0, 8),
+        BackgroundTransparency = 1, Text = "ESP Distance", TextColor3 = Colors.TextMain,
+        TextSize = 13, Font = Enum.Font.GothamSemibold, TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = sliderFrame
+    })
+    local distValue = Settings.ESP.Distance
+    local distLabel = Create("TextLabel", {
+        Size = UDim2.new(0, 70, 0, 20), Position = UDim2.new(1, -80, 0, 8),
+        BackgroundTransparency = 1, Text = distValue .. "m", TextColor3 = Colors.Accent,
+        TextSize = 13, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Right,
+        Parent = sliderFrame
+    })
+    local sliderBar = Create("Frame", {
+        Size = UDim2.new(1, -32, 0, 8), Position = UDim2.new(0, 16, 0, 38),
+        BackgroundColor3 = Colors.SliderBG, BorderSizePixel = 0, Parent = sliderFrame
+    })
+    RoundCorner(sliderBar, 8)
+    local fill = Create("Frame", {
+        Size = UDim2.new((distValue-1)/3999, 0, 1, 0), BackgroundColor3 = Colors.SliderFill,
+        BorderSizePixel = 0, Parent = sliderBar
+    })
+    RoundCorner(fill, 8)
+    local knob = Create("TextButton", {
+        Size = UDim2.new(0, 18, 0, 18), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new((distValue-1)/3999, 0, 0.5, 0), BackgroundColor3 = Color3.fromRGB(50, 130, 220),
+        BorderSizePixel = 0, Text = "", AutoButtonColor = false, Parent = sliderBar
+    })
+    RoundCorner(knob, 999)
+
+    local dragging = false
+    local function applySlider(mouseX)
+        local barSize = sliderBar.AbsoluteSize.X
+        if barSize <= 0 then return end
+        local percent = math.clamp((mouseX - sliderBar.AbsolutePosition.X) / barSize, 0, 1)
+        distValue = math.max(1, math.floor(1 + percent * 3999))
+        Settings.ESP.Distance = distValue
+        distLabel.Text = distValue .. "m"
+        fill.Size = UDim2.new(percent, 0, 1, 0)
+        knob.Position = UDim2.new(percent, 0, 0.5, 0)
+    end
+
+    knob.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true end
+    end)
+    sliderBar.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true; applySlider(inp.Position.X)
+        end
+    end)
+    local sliderEnded = UserInputService.InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+    end)
+    local sliderChanged = UserInputService.InputChanged:Connect(function(inp)
+        if dragging and inp.UserInputType == Enum.UserInputType.MouseMovement then
+            applySlider(inp.Position.X)
+        end
+    end)
+    scroll.AncestryChanged:Connect(function()
+        if not scroll.Parent then
+            sliderEnded:Disconnect()
+            sliderChanged:Disconnect()
+        end
+    end)
+
+    y = y + 80
+
+    local dropdowns = {}
+
+    local function relayout()
+        local curY = y
+        for _, d in ipairs(dropdowns) do
+            d.header.Position = UDim2.new(0, 10, 0, curY)
+            d.content.Position = UDim2.new(0, 10, 0, curY + 40 + 4)
+            curY = curY + 40 + (d.expanded and (d.contentH + 4) or 0) + 8
+        end
+        scroll.CanvasSize = UDim2.new(0, 0, 0, curY + 10)
+    end
+
+    local function MakeDropdown(title, accentColor, rows)
+        local HEADER_H = 40
+        local ROW_H    = 40
+        local ROW_GAP  = 5
+        local contentH = #rows * ROW_H + math.max(0, #rows - 1) * ROW_GAP
+
+        local header = Create("TextButton", {
+            Size = UDim2.new(1, -20, 0, HEADER_H),
+            Position = UDim2.new(0, 10, 0, 0),
+            BackgroundColor3 = Colors.Card, BorderSizePixel = 0, Text = "", Parent = scroll
+        })
+        RoundCorner(header, 12)
+        Create("Frame", {
+            Size = UDim2.new(0, 3, 1, 0),
+            BackgroundColor3 = accentColor, BorderSizePixel = 0, Parent = header
+        })
+        Create("TextLabel", {
+            Size = UDim2.new(0, 200, 1, 0), Position = UDim2.new(0, 14, 0, 0),
+            BackgroundTransparency = 1, Text = title, TextColor3 = Colors.TextMain,
+            TextSize = 14, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = header
+        })
+        local arrowLbl = Create("TextLabel", {
+            Size = UDim2.new(0, 30, 1, 0), Position = UDim2.new(1, -34, 0, 0),
+            BackgroundTransparency = 1, Text = "▶", TextColor3 = Colors.TextMuted,
+            TextSize = 18, Font = Enum.Font.GothamBold, Parent = header
+        })
+
+        local content = Create("Frame", {
+            Size = UDim2.new(1, -20, 0, contentH),
+            Position = UDim2.new(0, 10, 0, 0),
+            BackgroundTransparency = 1, Visible = false, Parent = scroll
+        })
+
+        for i, row in ipairs(rows) do
+            local rowY = (i-1) * (ROW_H + ROW_GAP)
+            local rowFrame = Create("Frame", {
+                Size = UDim2.new(1, 0, 0, ROW_H), Position = UDim2.new(0, 0, 0, rowY),
+                BackgroundColor3 = Colors.Card, BorderSizePixel = 0, Parent = content
+            })
+            RoundCorner(rowFrame, 10)
+            if row.barColor then
+                local lb = Create("Frame", {
+                    Size = UDim2.new(0, 3, 1, -16), Position = UDim2.new(0, 8, 0, 8),
+                    BackgroundColor3 = row.barColor, BorderSizePixel = 0, Parent = rowFrame
+                })
+                RoundCorner(lb, 4)
+            end
+            local labelX = row.barColor and 20 or 14
+            Create("TextLabel", {
+                Size = UDim2.new(0, 200, 1, 0), Position = UDim2.new(0, labelX, 0, 0),
+                BackgroundTransparency = 1, Text = row.label,
+                TextColor3 = Colors.Accent,
+                TextSize = 13, Font = Enum.Font.GothamSemibold,
+                TextXAlignment = Enum.TextXAlignment.Left, Parent = rowFrame
+            })
+            local toggleBtn = Create("TextButton", {
+                Size = UDim2.new(0, 28, 0, 28), Position = UDim2.new(1, -38, 0.5, -14),
+                BackgroundColor3 = row.settingGet() and Colors.ToggleOn or Colors.ToggleOff,
+                BorderSizePixel = 0,
+                Text = row.settingGet() and "✓" or "",
+                TextColor3 = Color3.fromRGB(140, 200, 255), TextSize = 18, Font = Enum.Font.GothamBold,
+                Parent = rowFrame
+            })
+            RoundCorner(toggleBtn, 6)
+            toggleBtn.MouseButton1Click:Connect(function()
+                local v = row.settingSet()
+                toggleBtn.BackgroundColor3 = v and Colors.ToggleOn or Colors.ToggleOff
+                toggleBtn.Text = v and "✓" or ""
+            end)
+        end
+
+        local entry = { header = header, content = content, contentH = contentH, expanded = false }
+        table.insert(dropdowns, entry)
+
+        header.MouseButton1Click:Connect(function()
+            entry.expanded = not entry.expanded
+            content.Visible = entry.expanded
+            arrowLbl.Text = entry.expanded and "▼" or "▶"
+            relayout()
+        end)
+    end
+
+    MakeDropdown("👥 Players", Colors.Accent, {
+        {
+            label = "Auras", labelColor = Colors.TextMain,
+            settingGet = function() return Settings.ESP.Auras end,
+            settingSet = function()
+                Settings.ESP.Auras = not Settings.ESP.Auras
+                return Settings.ESP.Auras
+            end,
+        },
+        {
+            label = "Names", labelColor = Colors.TextMain,
+            settingGet = function() return Settings.ESP.Names end,
+            settingSet = function()
+                Settings.ESP.Names = not Settings.ESP.Names
+                return Settings.ESP.Names
+            end,
+        },
+    })
+
+    local tierDefs = {
+        { key = "Common",   label = "Common Treasure",    color = Color3.fromRGB(220,220,220) },
+        { key = "Rare",     label = "Rare Treasure",      color = Color3.fromRGB(80,160,255)  },
+        { key = "VeryRare", label = "Very Rare Treasure", color = Color3.fromRGB(200,100,255) },
+        { key = "Lost",     label = "Lost Treasure",      color = Color3.fromRGB(255,160,40)  },
+    }
+    local treasureRows = {}
+    for _, tier in ipairs(tierDefs) do
+        local ts = Settings.Treasure[tier.key]
+        table.insert(treasureRows, {
+            label = tier.label, labelColor = tier.color, barColor = tier.color,
+            settingGet = function() return ts.Enabled end,
+            settingSet = function()
+                ts.Enabled = not ts.Enabled
+                debugLog(tier.key .. " treasure ESP: " .. tostring(ts.Enabled))
+                return ts.Enabled
+            end,
+        })
+    end
+    MakeDropdown("💎 Treasure", Color3.fromRGB(255,160,40), treasureRows)
+
+    local altarBarColors = {
+        Grade1 = Color3.fromRGB(220,220,220),
+        Grade2 = Color3.fromRGB(255,230,80),
+        Grade3 = Color3.fromRGB(255,160,40),
+        Grade4 = Color3.fromRGB(255,70,50),
+        Grade5 = Color3.fromRGB(220,20,60),
+    }
+    local altarRows = {}
+    for _, grade in ipairs(AltarGrades) do
+        local gs = Settings.Altar[grade.key]
+        table.insert(altarRows, {
+            label = grade.label,
+            labelColor = grade.textColor,
+            barColor = altarBarColors[grade.key],
+            settingGet = function() return gs.Enabled end,
+            settingSet = function()
+                gs.Enabled = not gs.Enabled
+                debugLog(grade.key .. " altar ESP: " .. tostring(gs.Enabled))
+                return gs.Enabled
+            end,
+        })
+    end
+    MakeDropdown("🔥 Altars", ALTAR_ACCENT, altarRows)
+
+    relayout()
+end
+
+-- ============================================
+-- FARMING: KILL AURA
+-- ============================================
+local FarmingSettings = { KillAura = false }
+
+local KA_DMG_MULTIPLIER = 200
+local KA_RANGE          = 6000
+local KA_FIRE_INTERVAL  = 4
+
+local _kaPatched = {}
+local _castRemote   = nil
+local _fireThread   = nil
+
+local function _safePath(root, ...)
+    local cur = root
+    for _, seg in ipairs({...}) do
+        if not cur then return nil end
+        cur = cur:FindFirstChild(seg)
+    end
+    return cur
+end
+
+local function _patchValue(obj, newVal)
+    for _, p in ipairs(_kaPatched) do
+        if p.obj == obj then return end
+    end
+    local orig = obj.Value
+    pcall(function() obj.Value = newVal end)
+    table.insert(_kaPatched, { obj = obj, orig = orig })
+    debugLog("[KillAura] Patched " .. obj:GetFullName()
+        .. "  " .. tostring(orig) .. " → " .. tostring(obj.Value))
+end
+
+local function _scanAndPatch(container)
+    if not container then return end
+    for _, obj in ipairs(container:GetDescendants()) do
+        if obj:IsA("NumberValue") or obj:IsA("IntValue") then
+            local n = obj.Name:lower():gsub("[%s_%-%.]", "")
+            if n:find("damage") or n:find("dmg") or n:find("power")
+                or n:find("basedmg") or n:find("atk") or n:find("force") then
+                _patchValue(obj, obj.Value * KA_DMG_MULTIPLIER)
+            elseif n:find("range") or n:find("radius") or n:find("reach")
+                or n:find("aoe") or n:find("distance") then
+                if obj.Value < KA_RANGE then
+                    _patchValue(obj, KA_RANGE)
+                end
+            end
+        end
+        if obj:IsA("BasePart") then
+            local n = obj.Name:lower():gsub("[%s_%-%.]", "")
+            if n:find("qipressure") or n:find("qip") then
+                pcall(function()
+                    obj.CanCollide   = false
+                    obj.Transparency = 1
+                    if obj.CanQuery ~= nil then
+                        obj.CanQuery = false
+                    end
+                end)
+            end
+        end
+    end
+end
+
+local function _restoreAll()
+    for _, p in ipairs(_kaPatched) do
+        pcall(function()
+            if p.obj and p.obj.Parent then
+                p.obj.Value = p.orig
+            end
+        end)
+    end
+    _kaPatched = {}
+    debugLog("[KillAura] All values restored")
+end
+
+local function _getCastRemote()
+    if _castRemote and _castRemote.Parent then return _castRemote end
+    local RS = game:GetService("ReplicatedStorage")
+    _castRemote = _safePath(RS, "RemoteFunctions", "CastAbility")
+    if _castRemote then
+        debugLog("[KillAura] CastAbility remote found (hardcoded path)")
+        return _castRemote
+    end
+    for _, obj in ipairs(RS:GetDescendants()) do
+        if (obj:IsA("RemoteFunction") or obj:IsA("RemoteEvent"))
+            and obj.Name:lower():find("castability") then
+            _castRemote = obj
+            debugLog("[KillAura] CastAbility remote found (broad): " .. obj:GetFullName())
+            return _castRemote
+        end
+    end
+    debugLog("[KillAura] CastAbility remote NOT found — skill won't auto-cast", true)
+    return nil
+end
+
+local function _getQiTool()
+    local char = LocalPlayer.Character
+    if char then
+        local t = char:FindFirstChild("Qi Pressure")
+        if t and (t:IsA("Tool") or t:IsA("Model")) then return t end
+    end
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then
+        local t = bp:FindFirstChild("Qi Pressure")
+        if t and (t:IsA("Tool") or t:IsA("Model")) then return t end
+    end
+    return nil
+end
+
+local function _fireSkill()
+    local remote = _getCastRemote()
+    if not remote then return end
+
+    local tool = _getQiTool()
+
+    if remote:IsA("RemoteFunction") then
+        task.spawn(function()
+            pcall(function()
+                if tool then
+                    remote:InvokeServer(tool)
+                    remote:InvokeServer(tool.Name)
+                    remote:InvokeServer("QiPressure")
+                    remote:InvokeServer("Qi Pressure")
+                else
+                    remote:InvokeServer("QiPressure")
+                    remote:InvokeServer("Qi Pressure")
+                end
+            end)
+        end)
+    elseif remote:IsA("RemoteEvent") then
+        task.spawn(function()
+            pcall(function()
+                if tool then
+                    remote:FireServer(tool)
+                    remote:FireServer(tool.Name)
+                    remote:FireServer("QiPressure")
+                else
+                    remote:FireServer("QiPressure")
+                end
+            end)
+        end)
+    end
+
+    debugLog("[KillAura] Skill fire attempted")
+end
+
+local _selfProtectConn = nil
+
+local function _startSelfProtect()
+    if _selfProtectConn then _selfProtectConn:Disconnect() end
+
+    local function hookChar(char)
+        if not char then return end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum then return end
+
+        local tag = char:FindFirstChild("_SoulHubProtect")
+        if not tag then
+            tag = Instance.new("BoolValue")
+            tag.Name = "_SoulHubProtect"
+            tag.Value = true
+            tag.Parent = char
+        end
+
+        _selfProtectConn = hum.HealthChanged:Connect(function(newHealth)
+            if not FarmingSettings.KillAura then return end
+            if newHealth < hum.MaxHealth * 0.99 then
+                pcall(function() hum.Health = hum.MaxHealth end)
+            end
+        end)
+    end
+
+    hookChar(LocalPlayer.Character)
+    LocalPlayer.CharacterAdded:Connect(function(char)
+        task.wait(0.5)
+        hookChar(char)
+    end)
+end
+
+local function _stopSelfProtect()
+    if _selfProtectConn then
+        _selfProtectConn:Disconnect()
+        _selfProtectConn = nil
+    end
+    local char = LocalPlayer.Character
+    if char then
+        local tag = char:FindFirstChild("_SoulHubProtect")
+        if tag then tag:Destroy() end
+    end
+end
+
+local function _applyKillAura()
+    _kaPatched = {}
+
+    local RS = game:GetService("ReplicatedStorage")
+    local rsTemplate = _safePath(RS, "Misc", "QiPressure")
+    if rsTemplate then
+        _scanAndPatch(rsTemplate)
+        debugLog("[KillAura] Patched RS.Misc.QiPressure template")
+    else
+        debugLog("[KillAura] RS.Misc.QiPressure not found — will patch tool only", true)
+    end
+
+    local tool = _getQiTool()
+    if tool then
+        _scanAndPatch(tool)
+        debugLog("[KillAura] Patched tool: " .. tool:GetFullName())
+    end
+
+    local dmgCount, rngCount = 0, 0
+    for _, p in ipairs(_kaPatched) do
+        local n = p.obj.Name:lower()
+        if n:find("range") or n:find("radius") or n:find("aoe") or n:find("distance") then
+            rngCount = rngCount + 1
+        else
+            dmgCount = dmgCount + 1
+        end
+    end
+    debugLog("[KillAura] Patches applied — dmg:" .. dmgCount .. "  range:" .. rngCount)
+
+    return dmgCount, rngCount
+end
+
+local function StartKillAura()
+    FarmingSettings.KillAura = true
+
+    _startSelfProtect()
+
+    local dmgCount, rngCount = _applyKillAura()
+
+    _fireSkill()
+
+    if _fireThread then task.cancel(_fireThread) end
+    _fireThread = task.spawn(function()
+        while FarmingSettings.KillAura do
+            task.wait(KA_FIRE_INTERVAL)
+            if not FarmingSettings.KillAura then break end
+
+            local needRepatch = false
+            for _, p in ipairs(_kaPatched) do
+                if p.obj and p.obj.Parent then
+                    local n = p.obj.Name:lower()
+                    if (n:find("range") or n:find("radius")) and p.obj.Value < KA_RANGE * 0.5 then
+                        needRepatch = true; break
+                    elseif p.obj.Value < p.orig * 1.5 then
+                        needRepatch = true; break
+                    end
+                end
+            end
+            if needRepatch or #_kaPatched == 0 then
+                debugLog("[KillAura] Re-patching values (server reset detected)")
+                _restoreAll()
+                _applyKillAura()
+            end
+
+            _fireSkill()
+        end
+    end)
+
+    if dmgCount + rngCount == 0 then
+        showNotification(
+            "⚔️  Kill Aura ON\n" ..
+            "Activate Qi Pressure manually once.\n" ..
+            "Auto re-cast every " .. KA_FIRE_INTERVAL .. "s.", 5)
+    else
+        showNotification(
+            "⚔️  Kill Aura ON  ·  ×" .. KA_DMG_MULTIPLIER ..
+            " dmg  ·  " .. KA_RANGE .. " range\n" ..
+            "(" .. dmgCount .. " dmg vals  " .. rngCount .. " range vals patched)", 4)
+    end
+end
+
+local function StopKillAura()
+    FarmingSettings.KillAura = false
+
+    if _fireThread then
+        task.cancel(_fireThread)
+        _fireThread = nil
+    end
+
+    _stopSelfProtect()
+    _restoreAll()
+
+    showNotification("⚔️  Kill Aura OFF — stats restored", 2)
+    debugLog("[KillAura] Stopped")
+end
+
+workspace.DescendantAdded:Connect(function(obj)
+    if not FarmingSettings.KillAura then return end
+    local char = LocalPlayer.Character
+    local bp   = LocalPlayer:FindFirstChild("Backpack")
+    local p    = obj.Parent
+    local isOwned = false
+    while p do
+        if p == char or p == bp then isOwned = true; break end
+        p = p.Parent
+    end
+    if not isOwned then return end
+
+    if obj:IsA("NumberValue") or obj:IsA("IntValue") then
+        local n = obj.Name:lower():gsub("[%s_%-%.]", "")
+        if n:find("damage") or n:find("dmg") or n:find("power")
+            or n:find("basedmg") or n:find("atk") or n:find("force") then
+            task.defer(function() _patchValue(obj, obj.Value * KA_DMG_MULTIPLIER) end)
+        elseif n:find("range") or n:find("radius") or n:find("reach")
+            or n:find("aoe") or n:find("distance") then
+            if obj.Value < KA_RANGE then
+                task.defer(function() _patchValue(obj, KA_RANGE) end)
+            end
+        end
+    elseif obj:IsA("BasePart") then
+        local n = obj.Name:lower():gsub("[%s_%-%.]", "")
+        if n:find("qipressure") or n:find("qip") then
+            pcall(function()
+                obj.CanCollide   = false
+                obj.Transparency = 1
+            end)
+        end
+    end
+end)
+
+-- ============================================
+-- AUTO BOSS FARMER
+-- ============================================
+FarmingSettings.AutoBoss = false
+
+local BOSS_KEYWORDS = {
+    -- ── CONFIRMED boss names from Soul Cultivation ────────────────────────────
+    "hao bing ren", "haobingren",
+    "zanshi huo ren", "zanshihuoren",
+    "zanshi bing ren", "zanshibingren",
+    "respawn hao", "respawn zanshi",
+    -- ── Generic fallbacks ─────────────────────────────────────────────────────
+    "boss", "demongod", "demon god", "celestialbeing", "celestial being",
+    "soulking", "soul king", "ancientbeast", "ancient beast",
+    "worldboss", "world boss", "trialboss", "trial boss",
+}
+
+local BOSS_ATTACK_RANGE = 8
+local LIGHT_ATTACK_INTERVAL = 0.5
+
+local _bossThread    = nil
+local _bossBodyPos   = nil
+local _bossBodyGyro  = nil
+
+-- ── FIX: persistent no-clip connection ───────────────────────────────────────
+local _noClipConn = nil
+
+local function _isBossModel(obj)
+    if not obj:IsA("Model") then return false end
+    local lower = obj.Name:lower()
+    for _, kw in ipairs(BOSS_KEYWORDS) do
+        if lower:find(kw, 1, true) then return true end
+    end
+    return false
+end
+
+local function _bossAlive(model)
+    if not model or not model.Parent then return false end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
+    local dead = model:FindFirstChild("IsDead") or model:FindFirstChild("Dead")
+    if dead and dead:IsA("BoolValue") and dead.Value then return false end
+    return true
+end
+
+local function _bossRoot(model)
+    return model.PrimaryPart
+        or model:FindFirstChild("HumanoidRootPart")
+        or model:FindFirstChildOfClass("BasePart")
+end
+
+local _cachedBosses   = {}
+local _bossRescanTick = 0
+local BOSS_RESCAN_INTERVAL = 5
+
+local function _playerCharSet()
+    local set = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Character then set[p.Character] = true end
+    end
+    return set
+end
+
+local function _rebuildBossCache()
+    local charSet = _playerCharSet()
+    local found = {}
+    for _, obj in ipairs(workspace:GetChildren()) do
+        local function checkModel(m)
+            if not m:IsA("Model") then return end
+            if charSet[m] then return end
+            if _isBossModel(m) and _bossAlive(m) then
+                table.insert(found, m)
+            end
+        end
+        checkModel(obj)
+        if obj:IsA("Folder") or obj:IsA("Model") then
+            for _, child in ipairs(obj:GetChildren()) do
+                checkModel(child)
+            end
+        end
+        if #found >= 2 then break end
+    end
+    _cachedBosses = found
+    _bossRescanTick = tick()
+end
+
+local function _findBosses()
+    if tick() - _bossRescanTick >= BOSS_RESCAN_INTERVAL then
+        _rebuildBossCache()
+    end
+    local alive = {}
+    for _, b in ipairs(_cachedBosses) do
+        if _bossAlive(b) then
+            table.insert(alive, b)
+        end
+    end
+    -- Sort by distance to player — attack closest boss first
+    local char = LocalPlayer.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp and #alive > 1 then
+        local myPos = hrp.Position
+        table.sort(alive, function(a, b)
+            local ra = _bossRoot(a)
+            local rb = _bossRoot(b)
+            local da = ra and (myPos - ra.Position).Magnitude or math.huge
+            local db = rb and (myPos - rb.Position).Magnitude or math.huge
+            return da < db
+        end)
+    end
+    return alive
+end
+
+local FLY_SPEED = 250
+
+-- ── FIXED _enableFlight — continuous no-clip via Heartbeat ───────────────────
+local function _enableFlight(hrp)
+    -- Clean up any existing movers
+    for _, n in ipairs({"_ABossBodyPos","_ABossBodyGyro","_ABossBodyVel","_ABossAngVel"}) do
+        local old = hrp:FindFirstChild(n)
+        if old then old:Destroy() end
+    end
+
+    -- BodyVelocity for steering
+    local bv = Instance.new("BodyVelocity")
+    bv.Name      = "_ABossBodyVel"
+    bv.MaxForce  = Vector3.new(1e5, 1e5, 1e5)
+    bv.Velocity  = Vector3.zero
+    bv.Parent    = hrp
+    _bossBodyPos = bv
+
+    -- BodyAngularVelocity to kill spin
+    local bav = Instance.new("BodyAngularVelocity")
+    bav.Name           = "_ABossAngVel"
+    bav.MaxTorque      = Vector3.new(1e6, 1e6, 1e6)
+    bav.AngularVelocity = Vector3.zero
+    bav.P              = 3000
+    bav.Parent         = hrp
+
+    -- BodyGyro for facing
+    local bg = Instance.new("BodyGyro")
+    bg.Name      = "_ABossBodyGyro"
+    bg.MaxTorque = Vector3.new(0, 1e5, 0)
+    bg.D         = 200
+    bg.P         = 5000
+    bg.CFrame    = hrp.CFrame
+    bg.Parent    = hrp
+    _bossBodyGyro = bg
+
+    -- Disconnect any existing no-clip loop before making a new one
+    if _noClipConn then
+        _noClipConn:Disconnect()
+        _noClipConn = nil
+    end
+
+    -- Continuous no-clip: runs every frame so server/physics can never re-enable collision
+    _noClipConn = RunService.Heartbeat:Connect(function()
+        if not FarmingSettings.AutoBoss then
+            -- Auto-stop if AutoBoss was turned off
+            if _noClipConn then
+                _noClipConn:Disconnect()
+                _noClipConn = nil
+            end
+            return
+        end
+        local char = LocalPlayer.Character
+        if not char then return end
+        for _, p in ipairs(char:GetDescendants()) do
+            if p:IsA("BasePart") then
+                p.CanCollide = false
+                -- Zero out angular velocity each frame to prevent spin
+                pcall(function()
+                    p.AssemblyAngularVelocity = Vector3.zero
+                end)
+            end
+        end
+        -- Keep Humanoid from triggering fall/physics animations
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            pcall(function() hum.PlatformStand = true end)
+        end
+    end)
+
+    debugLog("[AutoBoss] Flight + continuous no-clip enabled (250 studs/s)")
+end
+
+-- ── FIXED _disableFlight — kills the no-clip loop then restores collision ─────
+local function _disableFlight()
+    -- Kill the no-clip heartbeat FIRST so it stops overwriting CanCollide
+    if _noClipConn then
+        _noClipConn:Disconnect()
+        _noClipConn = nil
+    end
+
+    -- Zero out velocity so character doesn't drift
+    if _bossBodyPos and _bossBodyPos.Parent then
+        pcall(function() _bossBodyPos.Velocity = Vector3.zero end)
+        _bossBodyPos:Destroy()
+    end
+    if _bossBodyGyro and _bossBodyGyro.Parent then
+        _bossBodyGyro:Destroy()
+    end
+    _bossBodyPos  = nil
+    _bossBodyGyro = nil
+
+    -- Also destroy the anti-spin mover
+    local char = LocalPlayer.Character
+    if char then
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local bav = hrp:FindFirstChild("_ABossAngVel")
+            if bav then bav:Destroy() end
+        end
+    end
+
+    -- Restore collision and unfreeze humanoid after a short delay so physics can settle
+    task.delay(0.5, function()
+        local c = LocalPlayer.Character
+        if c then
+            for _, p in ipairs(c:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    pcall(function() p.CanCollide = true end)
+                    pcall(function() p.AssemblyAngularVelocity = Vector3.zero end)
+                    pcall(function() p.AssemblyLinearVelocity  = Vector3.zero end)
+                end
+            end
+            local hum = c:FindFirstChildOfClass("Humanoid")
+            if hum then
+                pcall(function() hum.PlatformStand = false end)
+            end
+        end
+    end)
+
+    debugLog("[AutoBoss] Flight disabled, collision restored")
+end
+
+-- ── CONFIRMED ATTACK SYSTEM (from dump) ──────────────────────────────────────
+-- The boss has Tools named "Light" and "Heavy" in its backpack.
+-- Soul Cultivation fires attacks by invoking RemoteEvents under
+-- ReplicatedStorage.RemoteEvents — specifically ones related to combat actions.
+-- The player's own Light/Heavy tools work the same way.
+--
+-- Strategy: grab the player's Light tool, equip it if needed, then fire
+-- every RemoteEvent in RS.RemoteEvents with the tool + action args.
+-- We also try direct tool activation via Tool:Activate().
+
+local _attackRemoteFolder = nil   -- RS.RemoteEvents folder, cached
+local _lightTool          = nil   -- player's "Light" tool, cached
+
+local function _getAttackRemoteFolder()
+    if _attackRemoteFolder and _attackRemoteFolder.Parent then
+        return _attackRemoteFolder
+    end
+    local RS = game:GetService("ReplicatedStorage")
+    _attackRemoteFolder = RS:FindFirstChild("RemoteEvents")
+    return _attackRemoteFolder
+end
+
+local function _getLightTool()
+    -- Check character first (already equipped)
+    local char = LocalPlayer.Character
+    if char then
+        local t = char:FindFirstChild("Light")
+        if t and t:IsA("Tool") then return t end
+        local h = char:FindFirstChild("Heavy")
+        if h and h:IsA("Tool") then return h end
+    end
+    -- Then backpack
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then
+        local t = bp:FindFirstChild("Light")
+        if t and t:IsA("Tool") then return t end
+        local h = bp:FindFirstChild("Heavy")
+        if h and h:IsA("Tool") then return h end
+    end
+    return nil
+end
+
+local function _ensureLightEquipped()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    -- Already equipped?
+    local equipped = char:FindFirstChild("Light")
+    if equipped and equipped:IsA("Tool") then return equipped end
+    local heavyE = char:FindFirstChild("Heavy")
+    if heavyE and heavyE:IsA("Tool") then return heavyE end
+    -- Equip from backpack
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then
+        local lt = bp:FindFirstChild("Light")
+        if lt and lt:IsA("Tool") then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                pcall(function() hum:EquipTool(lt) end)
+                task.wait(0.1)
+                return char:FindFirstChild("Light") or lt
+            end
+        end
+        local hv = bp:FindFirstChild("Heavy")
+        if hv and hv:IsA("Tool") then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                pcall(function() hum:EquipTool(hv) end)
+                task.wait(0.1)
+                return char:FindFirstChild("Heavy") or hv
+            end
+        end
+    end
+    return nil
+end
+
+local function _fireLightAttack()
+    local char = LocalPlayer.Character
+    if not char then return end
+
+    local RS = game:GetService("ReplicatedStorage")
+
+    -- Ensure Light tool is equipped before attacking
+    local tool = _ensureLightEquipped()
+
+    -- Fire RS.RemoteEvents.Attack with multiple arg patterns
+    local attackEvent = _safePath(RS, "RemoteEvents", "Attack")
+    if attackEvent then
+        pcall(function() attackEvent:FireServer() end)
+        if tool then
+            pcall(function() attackEvent:FireServer(tool) end)
+            pcall(function() attackEvent:FireServer(tool.Name) end)
+        end
+        pcall(function() attackEvent:FireServer("Light") end)
+        pcall(function() attackEvent:FireServer("LightAttack") end)
+        pcall(function() attackEvent:FireServer(1) end)
+    end
+
+    -- Tool:Activate() — works only when actually equipped
+    if tool and tool.Parent == char then
+        pcall(function() tool:Activate() end)
+    end
+end
+
+local function _bossLoop()
+    debugLog("[AutoBoss] Loop started")
+
+    local RESPAWN_WAIT = 15 * 60
+    local deathTimes   = {}
+    local attackTick   = 0
+    local currentTarget = nil
+
+    _rebuildBossCache()
+
+    while FarmingSettings.AutoBoss do
+        task.wait(0.1)
+
+        local char = LocalPlayer.Character
+        local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+
+        if not hrp or not hum or hum.Health <= 0 then
+            _disableFlight()
+            task.wait(3)
+            continue
+        end
+
+        local bosses = _findBosses()
+
+        if #bosses == 0 then
+            if _bossBodyPos and _bossBodyPos.Parent then
+                pcall(function() _bossBodyPos.Velocity = Vector3.zero end)
+            end
+            currentTarget = nil
+            local earliest = math.huge
+            for _, t in pairs(deathTimes) do
+                local rem = RESPAWN_WAIT - (tick() - t)
+                if rem > 0 and rem < earliest then earliest = rem end
+            end
+            if earliest < math.huge then
+                local m, s = math.floor(earliest/60), math.floor(earliest%60)
+                debugLog(string.format("[AutoBoss] Waiting for respawn — %dm %02ds", m, s))
+            end
+            continue
+        end
+
+        -- Ensure flight + continuous no-clip is active
+        if not (_bossBodyPos and _bossBodyPos.Parent) then
+            _enableFlight(hrp)
+        end
+
+        if not (currentTarget and _bossAlive(currentTarget)) then
+            if currentTarget then
+                deathTimes[tostring(currentTarget)] = tick()
+                debugLog("[AutoBoss] Boss died, switching target")
+            end
+            currentTarget = bosses[1]
+        end
+
+        local targetRoot = _bossRoot(currentTarget)
+        if not (targetRoot and targetRoot.Parent) then
+            currentTarget = nil
+            continue
+        end
+
+        local bossPos = targetRoot.Position
+        local myPos   = hrp.Position
+        local dist    = (myPos - bossPos).Magnitude
+
+        local bv = _bossBodyPos
+
+        if dist > BOSS_ATTACK_RANGE then
+            -- ── Phase 1: Fly toward boss ──────────────────────────────────────
+            if bv and bv.Parent then
+                local dir = (bossPos - myPos).Unit
+                bv.Velocity = dir * FLY_SPEED
+            end
+        else
+            -- ── Phase 2: Lock into a stationary hover beside the boss ─────────
+            -- Pick a fixed offset position and hold it still — no CFrame snapping
+            -- which causes the floating-over and hands-up glitch.
+            local hoverOffset = Vector3.new(0, 2, 3)   -- beside+slightly above
+            local hoverTarget = bossPos + hoverOffset
+
+            if bv and bv.Parent then
+                -- Gently push toward hover position without hard-teleporting
+                local toHover = hoverTarget - myPos
+                if toHover.Magnitude > 0.8 then
+                    bv.Velocity = toHover.Unit * math.min(toHover.Magnitude * 8, 60)
+                else
+                    bv.Velocity = Vector3.zero
+                end
+            end
+
+            -- Face the boss (horizontal only)
+            if _bossBodyGyro and _bossBodyGyro.Parent then
+                local lookDir = Vector3.new(bossPos.X - myPos.X, 0, bossPos.Z - myPos.Z)
+                if lookDir.Magnitude > 0.1 then
+                    _bossBodyGyro.CFrame = CFrame.new(myPos, myPos + lookDir)
+                end
+            end
+
+            -- ── Attack every LIGHT_ATTACK_INTERVAL ────────────────────────────
+            local now = tick()
+            if (now - attackTick) >= LIGHT_ATTACK_INTERVAL then
+                attackTick = now
+                _fireLightAttack()
+            end
+        end  -- end if dist > BOSS_ATTACK_RANGE / else
+
+    end  -- end while FarmingSettings.AutoBoss
+
+    _disableFlight()
+    debugLog("[AutoBoss] Loop ended")
+end
+
+local function StartAutoBoss()
+    FarmingSettings.AutoBoss = true
+    if _bossThread then task.cancel(_bossThread) end
+    _bossThread = task.spawn(_bossLoop)
+    showNotification("🐉  Auto Boss ON\nFlying to boss · attacking every 0.5s", 3)
+end
+
+local function StopAutoBoss()
+    FarmingSettings.AutoBoss = false
+    if _bossThread then task.cancel(_bossThread); _bossThread = nil end
+    _disableFlight()
+    showNotification("🐉  Auto Boss OFF", 2)
+end
+
+LocalPlayer.CharacterAdded:Connect(function()
+    if FarmingSettings.AutoBoss then
+        task.wait(2)
+        if _bossThread then task.cancel(_bossThread) end
+        _bossThread = task.spawn(_bossLoop)
+    end
+end)
+
+-- ============================================
+-- FARMING TAB UI
+-- ============================================
+local function CreateFarmingTab()
+    local scroll = Create("ScrollingFrame", {
+        Size = UDim2.new(1, -8, 1, -8), Position = UDim2.new(0, 4, 0, 4),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4,
+        CanvasSize = UDim2.new(0, 0, 0, 0), Parent = ContentFrame
+    })
+
+    local y = 10
+
+    Create("TextLabel", {
+        Size = UDim2.new(1, -20, 0, 20), Position = UDim2.new(0, 10, 0, y),
+        BackgroundTransparency = 1, Text = "Farming Options", TextColor3 = Colors.TextMain,
+        TextSize = 14, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = scroll
+    })
+    y = y + 30
+
+    local function MakeToggleRow(posY, icon, title, subtitle, isOn, onToggle)
+        local card = Create("TextButton", {
+            Size = UDim2.new(1, -20, 0, 62), Position = UDim2.new(0, 10, 0, posY),
+            BackgroundColor3 = Colors.Card, BorderSizePixel = 0,
+            Text = "", AutoButtonColor = false, Parent = scroll
+        })
+        RoundCorner(card, 12)
+
+        local accentBar = Create("Frame", {
+            Size = UDim2.new(0, 3, 1, -16), Position = UDim2.new(0, 10, 0, 8),
+            BackgroundColor3 = Colors.Accent, BorderSizePixel = 0, Parent = card
+        })
+        RoundCorner(accentBar, 4)
+
+        Create("TextLabel", {
+            Size = UDim2.new(0, 28, 0, 28), Position = UDim2.new(0, 22, 0, 17),
+            BackgroundTransparency = 1, Text = icon, TextSize = 22,
+            Font = Enum.Font.GothamBold, Parent = card
+        })
+
+        Create("TextLabel", {
+            Size = UDim2.new(0, 280, 0, 20), Position = UDim2.new(0, 58, 0, 10),
+            BackgroundTransparency = 1, Text = title, TextColor3 = Colors.TextMain,
+            TextSize = 13, Font = Enum.Font.GothamBold,
+            TextXAlignment = Enum.TextXAlignment.Left, Parent = card
+        })
+
+        Create("TextLabel", {
+            Size = UDim2.new(0, 280, 0, 16), Position = UDim2.new(0, 58, 0, 32),
+            BackgroundTransparency = 1, Text = subtitle, TextColor3 = Colors.TextMuted,
+            TextSize = 11, Font = Enum.Font.Gotham,
+            TextXAlignment = Enum.TextXAlignment.Left, Parent = card
+        })
+
+        local pillBG = Create("Frame", {
+            Size = UDim2.new(0, 46, 0, 24),
+            Position = UDim2.new(1, -58, 0.5, -12),
+            BackgroundColor3 = isOn and Colors.ToggleOn or Colors.ToggleOff,
+            BorderSizePixel = 0, Parent = card
+        })
+        RoundCorner(pillBG, 12)
+
+        local knob = Create("Frame", {
+            Size = UDim2.new(0, 18, 0, 18),
+            Position = isOn and UDim2.new(0, 24, 0.5, -9) or UDim2.new(0, 4, 0.5, -9),
+            BackgroundColor3 = Color3.fromRGB(220, 220, 220),
+            BorderSizePixel = 0, Parent = pillBG
+        })
+        RoundCorner(knob, 9)
+
+        local statusLbl = Create("TextLabel", {
+            Size = UDim2.new(0, 46, 0, 14),
+            Position = UDim2.new(1, -58, 0.5, 14),
+            BackgroundTransparency = 1,
+            Text = isOn and "ON" or "OFF",
+            TextColor3 = isOn and Colors.Accent or Colors.TextMuted,
+            TextSize = 10, Font = Enum.Font.GothamBold, Parent = card
+        })
+
+        local state = { on = isOn }
+
+        local function updateVisual(v)
+            TweenService:Create(pillBG, TweenInfo.new(0.18), {
+                BackgroundColor3 = v and Colors.ToggleOn or Colors.ToggleOff
+            }):Play()
+            TweenService:Create(knob, TweenInfo.new(0.18), {
+                Position = v and UDim2.new(0, 24, 0.5, -9) or UDim2.new(0, 4, 0.5, -9)
+            }):Play()
+            statusLbl.Text       = v and "ON"        or "OFF"
+            statusLbl.TextColor3 = v and Colors.Accent or Colors.TextMuted
+        end
+
+        card.MouseEnter:Connect(function()
+            TweenService:Create(card, TweenInfo.new(0.12),
+                {BackgroundColor3 = Color3.fromRGB(170, 200, 235)}):Play()
+        end)
+        card.MouseLeave:Connect(function()
+            TweenService:Create(card, TweenInfo.new(0.12),
+                {BackgroundColor3 = Colors.Card}):Play()
+        end)
+
+        card.MouseButton1Click:Connect(function()
+            state.on = not state.on
+            updateVisual(state.on)
+            onToggle(state.on)
+        end)
+
+        return card
+    end
+
+    MakeToggleRow(y,
+        "⚔️", "Kill Aura",
+        "Qi Pressure: ×200 dmg · 6000 range · self-safe",
+        FarmingSettings.KillAura,
+        function(v)
+            if v then StartKillAura() else StopKillAura() end
+        end
+    )
+    y = y + 70
+
+    MakeToggleRow(y,
+        "🐉", "Auto Boss",
+        "No-clip fly · light attack every 0.5s · 15m respawn wait",
+        FarmingSettings.AutoBoss,
+        function(v)
+            if v then StartAutoBoss() else StopAutoBoss() end
+        end
+    )
+    y = y + 70
+
+    local bossDumpBtn = Create("TextButton", {
+        Size = UDim2.new(1, -20, 0, 44), Position = UDim2.new(0, 10, 0, y),
+        BackgroundColor3 = Color3.fromRGB(185, 210, 240), BorderSizePixel = 0,
+        Text = "", AutoButtonColor = false, Parent = scroll
+    })
+    RoundCorner(bossDumpBtn, 10)
+    Create("UIStroke", { Color = Color3.fromRGB(30, 70, 140), Thickness = 1, Parent = bossDumpBtn })
+    Create("TextLabel", {
+        Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(0, 14, 0, 10),
+        BackgroundTransparency = 1, Text = "🔎", TextSize = 18,
+        Font = Enum.Font.GothamBold, Parent = bossDumpBtn
+    })
+    Create("TextLabel", {
+        Size = UDim2.new(0, 260, 0, 18), Position = UDim2.new(0, 44, 0, 6),
+        BackgroundTransparency = 1, Text = "Scan & List Bosses in Workspace",
+        TextColor3 = Colors.TextMain, TextSize = 12, Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Left, Parent = bossDumpBtn
+    })
+    Create("TextLabel", {
+        Size = UDim2.new(0, 260, 0, 14), Position = UDim2.new(0, 44, 0, 26),
+        BackgroundTransparency = 1, Text = "Prints all NPC models — add name to BOSS_KEYWORDS if needed",
+        TextColor3 = Colors.TextMuted, TextSize = 10, Font = Enum.Font.Gotham,
+        TextXAlignment = Enum.TextXAlignment.Left, Parent = bossDumpBtn
+    })
+    bossDumpBtn.MouseEnter:Connect(function()
+        TweenService:Create(bossDumpBtn, TweenInfo.new(0.12),
+            {BackgroundColor3 = Color3.fromRGB(170, 200, 235)}):Play()
+    end)
+    bossDumpBtn.MouseLeave:Connect(function()
+        TweenService:Create(bossDumpBtn, TweenInfo.new(0.12),
+            {BackgroundColor3 = Color3.fromRGB(185, 210, 240)}):Play()
+    end)
+    bossDumpBtn.MouseButton1Click:Connect(function()
+        showNotification("🔎  Boss scan — check executor console", 3)
+        task.spawn(function()
+            print("\n======= BOSS SCAN (all NPC models with Humanoid) =======")
+            local found = 0
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj:IsA("Model") then
+                    local isPlayer = false
+                    for _, p in ipairs(Players:GetPlayers()) do
+                        if p.Character and (obj == p.Character or obj:IsDescendantOf(p.Character)) then
+                            isPlayer = true; break
+                        end
+                    end
+                    if not isPlayer then
+                        local hum = obj:FindFirstChildOfClass("Humanoid")
+                        if hum then
+                            print(string.format("  [HP %.0f/%.0f]  Name=%q  Path=%s",
+                                hum.Health, hum.MaxHealth, obj.Name, obj:GetFullName()))
+                            found = found + 1
+                        end
+                    end
+                end
+            end
+            print(string.format("[SoulHub] %d NPC models found.", found))
+        end)
+    end)
+    y = y + 52
+
+    local scanBtn = Create("TextButton", {
+        Size = UDim2.new(1, -20, 0, 44), Position = UDim2.new(0, 10, 0, y),
+        BackgroundColor3 = Color3.fromRGB(185, 210, 240), BorderSizePixel = 0,
+        Text = "", AutoButtonColor = false, Parent = scroll
+    })
+    RoundCorner(scanBtn, 10)
+    Create("UIStroke", { Color = Color3.fromRGB(30, 70, 140), Thickness = 1, Parent = scanBtn })
+
+    Create("TextLabel", {
+        Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(0, 14, 0, 10),
+        BackgroundTransparency = 1, Text = "🔍", TextSize = 18,
+        Font = Enum.Font.GothamBold, Parent = scanBtn
+    })
+    Create("TextLabel", {
+        Size = UDim2.new(0, 260, 0, 18), Position = UDim2.new(0, 44, 0, 6),
+        BackgroundTransparency = 1, Text = "Scan & Dump Qi Pressure",
+        TextColor3 = Colors.TextMain, TextSize = 12, Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Left, Parent = scanBtn
+    })
+    Create("TextLabel", {
+        Size = UDim2.new(0, 260, 0, 14), Position = UDim2.new(0, 44, 0, 26),
+        BackgroundTransparency = 1, Text = "Prints all paths to console — equip Qi Pressure first",
+        TextColor3 = Colors.TextMuted, TextSize = 10, Font = Enum.Font.Gotham,
+        TextXAlignment = Enum.TextXAlignment.Left, Parent = scanBtn
+    })
+
+    scanBtn.MouseEnter:Connect(function()
+        TweenService:Create(scanBtn, TweenInfo.new(0.12),
+            {BackgroundColor3 = Color3.fromRGB(170, 200, 235)}):Play()
+    end)
+    scanBtn.MouseLeave:Connect(function()
+        TweenService:Create(scanBtn, TweenInfo.new(0.12),
+            {BackgroundColor3 = Color3.fromRGB(185, 210, 240)}):Play()
+    end)
+
+    scanBtn.MouseButton1Click:Connect(function()
+        showNotification("🔍  Scanning — check your executor console", 3)
+        task.spawn(function()
+            local RS    = game:GetService("ReplicatedStorage")
+            local char  = LocalPlayer.Character
+            local bp    = LocalPlayer:FindFirstChild("Backpack")
+
+            local lines = {}
+            local function dump(label, root)
+                if not root then return end
+                table.insert(lines, "\n======= " .. label .. " =======")
+                table.insert(lines, string.format(
+                    "[ROOT] %-40s  (%s)", root:GetFullName(), root.ClassName))
+                for _, obj in ipairs(root:GetDescendants()) do
+                    local val = ""
+                    if obj:IsA("NumberValue") or obj:IsA("IntValue")
+                        or obj:IsA("StringValue") or obj:IsA("BoolValue") then
+                        pcall(function() val = "  = " .. tostring(obj.Value) end)
+                    elseif obj:IsA("BasePart") then
+                        pcall(function()
+                            val = string.format("  Size=%s  CanCollide=%s",
+                                tostring(obj.Size),
+                                tostring(obj.CanCollide))
+                        end)
+                    end
+                    table.insert(lines, string.format(
+                        "  %-44s  %-26s%s",
+                        obj:GetFullName(), obj.ClassName, val))
+                end
+            end
+
+            dump("ReplicatedStorage (full)", RS)
+            dump("Character", char)
+            dump("Backpack", bp)
+
+            table.insert(lines, "\n======= ALL REMOTEEVENTS / REMOTEFUNCTIONS IN RS =======")
+            for _, obj in ipairs(RS:GetDescendants()) do
+                if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+                    table.insert(lines, string.format(
+                        "  [%s]  %s", obj.ClassName, obj:GetFullName()))
+                end
+            end
+
+            local chunk = {}
+            for i, line in ipairs(lines) do
+                table.insert(chunk, line)
+                if #chunk >= 80 or i == #lines then
+                    print(table.concat(chunk, "\n"))
+                    chunk = {}
+                    task.wait(0.05)
+                end
+            end
+
+            print("\n[SoulHub] DUMP COMPLETE — " .. #lines .. " lines total")
+        end)
+    end)
+    y = y + 52
+
+    -- ── Targeted RemoteEvents dump (what got cut off in the log) ─────────────
+    local remoteSpyBtn = Create("TextButton", {
+        Size = UDim2.new(1, -20, 0, 44), Position = UDim2.new(0, 10, 0, y),
+        BackgroundColor3 = Color3.fromRGB(185, 210, 240), BorderSizePixel = 0,
+        Text = "", AutoButtonColor = false, Parent = scroll
+    })
+    RoundCorner(remoteSpyBtn, 10)
+    Create("UIStroke", { Color = Color3.fromRGB(30, 70, 140), Thickness = 1, Parent = remoteSpyBtn })
+    Create("TextLabel", {
+        Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(0, 14, 0, 10),
+        BackgroundTransparency = 1, Text = "📡", TextSize = 18,
+        Font = Enum.Font.GothamBold, Parent = remoteSpyBtn
+    })
+    Create("TextLabel", {
+        Size = UDim2.new(0, 260, 0, 18), Position = UDim2.new(0, 44, 0, 6),
+        BackgroundTransparency = 1, Text = "Dump RS.RemoteEvents (find attack remote)",
+        TextColor3 = Colors.TextMain, TextSize = 12, Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Left, Parent = remoteSpyBtn
+    })
+    Create("TextLabel", {
+        Size = UDim2.new(0, 260, 0, 14), Position = UDim2.new(0, 44, 0, 26),
+        BackgroundTransparency = 1, Text = "Prints ONLY RemoteEvents folder — was cut off in your last log",
+        TextColor3 = Colors.TextMuted, TextSize = 10, Font = Enum.Font.Gotham,
+        TextXAlignment = Enum.TextXAlignment.Left, Parent = remoteSpyBtn
+    })
+    remoteSpyBtn.MouseEnter:Connect(function()
+        TweenService:Create(remoteSpyBtn, TweenInfo.new(0.12),
+            {BackgroundColor3 = Color3.fromRGB(170, 200, 235)}):Play()
+    end)
+    remoteSpyBtn.MouseLeave:Connect(function()
+        TweenService:Create(remoteSpyBtn, TweenInfo.new(0.12),
+            {BackgroundColor3 = Color3.fromRGB(185, 210, 240)}):Play()
+    end)
+    remoteSpyBtn.MouseButton1Click:Connect(function()
+        showNotification("📡  Dumping RS.RemoteEvents — check console", 3)
+        task.spawn(function()
+            local RS = game:GetService("ReplicatedStorage")
+            print("\n======= RS.RemoteEvents (all children) =======")
+            local reFolder = RS:FindFirstChild("RemoteEvents")
+            if not reFolder then
+                print("[SoulHub] RS.RemoteEvents folder NOT FOUND")
+                return
+            end
+            local count = 0
+            -- Print all children AND grandchildren
+            for _, obj in ipairs(reFolder:GetDescendants()) do
+                print(string.format("  [%-16s]  %s", obj.ClassName, obj:GetFullName()))
+                count = count + 1
+            end
+            print(string.format("[SoulHub] %d entries in RS.RemoteEvents.", count))
+
+            -- Also dump player's tools (Light/Heavy confirmed in dump)
+            print("\n======= YOUR TOOLS (Backpack + Character) =======")
+            local bp = LocalPlayer:FindFirstChild("Backpack")
+            if bp then
+                for _, t in ipairs(bp:GetChildren()) do
+                    print(string.format("  [Backpack]  %-20s  %s", t.Name, t.ClassName))
+                end
+            end
+            local char = LocalPlayer.Character
+            if char then
+                for _, t in ipairs(char:GetChildren()) do
+                    if t:IsA("Tool") then
+                        print(string.format("  [Equipped]  %-20s  %s", t.Name, t.ClassName))
+                    end
+                end
+            end
+        end)
+    end)
+    y = y + 52
+
+    scroll.CanvasSize = UDim2.new(0, 0, 0, y + 10)
+end
+
+local function CreateSettingsTab()
+    local scroll = Create("ScrollingFrame", {
+        Size = UDim2.new(1, -8, 1, -8), Position = UDim2.new(0, 4, 0, 4),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4,
+        CanvasSize = UDim2.new(0, 0, 0, 0), Parent = ContentFrame
+    })
+
+    local y = 12
+
+    -- Section header helper
+    local function SectionLabel(text, posY)
+        Create("TextLabel", {
+            Size = UDim2.new(1, -20, 0, 20), Position = UDim2.new(0, 12, 0, posY),
+            BackgroundTransparency = 1, Text = text, TextColor3 = Colors.TextMain,
+            TextSize = 13, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = scroll
+        })
+    end
+
+    -- Generic horizontal slider factory
+    local function MakeSlider(posY, labelText, minV, maxV, initV, fmt, onChange)
+        local card = Create("Frame", {
+            Size = UDim2.new(1, -20, 0, 68), Position = UDim2.new(0, 10, 0, posY),
+            BackgroundColor3 = Colors.Card, BorderSizePixel = 0, Parent = scroll
+        })
+        RoundCorner(card, 12)
+        Create("Frame", {Size = UDim2.new(0, 3, 1, 0), BackgroundColor3 = Colors.Accent,
+            BorderSizePixel = 0, Parent = card})
+
+        Create("TextLabel", {
+            Size = UDim2.new(0.6, 0, 0, 20), Position = UDim2.new(0, 14, 0, 8),
+            BackgroundTransparency = 1, Text = labelText, TextColor3 = Colors.TextMain,
+            TextSize = 12, Font = Enum.Font.GothamSemibold, TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = card
+        })
+        local valLbl = Create("TextLabel", {
+            Size = UDim2.new(0.36, 0, 0, 20), Position = UDim2.new(0.62, 0, 0, 8),
+            BackgroundTransparency = 1, Text = string.format(fmt, initV),
+            TextColor3 = Colors.Accent, TextSize = 12, Font = Enum.Font.GothamBold,
+            TextXAlignment = Enum.TextXAlignment.Right, Parent = card
+        })
+
+        local bar = Create("Frame", {
+            Size = UDim2.new(1, -32, 0, 7), Position = UDim2.new(0, 16, 0, 38),
+            BackgroundColor3 = Colors.SliderBG, BorderSizePixel = 0, Parent = card
+        })
+        RoundCorner(bar, 4)
+        local pct0 = (initV - minV) / (maxV - minV)
+        local fillF = Create("Frame", {
+            Size = UDim2.new(pct0, 0, 1, 0), BackgroundColor3 = Colors.SliderFill,
+            BorderSizePixel = 0, Parent = bar
+        })
+        RoundCorner(fillF, 4)
+        local knobB = Create("TextButton", {
+            Size = UDim2.new(0, 16, 0, 16), AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.new(pct0, 0, 0.5, 0),
+            BackgroundColor3 = Colors.Accent, BorderSizePixel = 0,
+            Text = "", AutoButtonColor = false, Parent = bar
+        })
+        RoundCorner(knobB, 999)
+
+        local drag = false
+        local function apply(mx)
+            local bsz = bar.AbsoluteSize.X
+            if bsz <= 0 then return end
+            local p = math.clamp((mx - bar.AbsolutePosition.X) / bsz, 0, 1)
+            local v = minV + p * (maxV - minV)
+            if fmt:find("d") or (maxV - minV) > 10 then v = math.floor(v + 0.5) end
+            valLbl.Text = string.format(fmt, v)
+            fillF.Size = UDim2.new(p, 0, 1, 0)
+            knobB.Position = UDim2.new(p, 0, 0.5, 0)
+            onChange(v)
+        end
+        knobB.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then drag = true end end)
+        bar.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then drag = true; apply(i.Position.X) end
+        end)
+        local ue = UserInputService.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then drag = false end
+        end)
+        local uc = UserInputService.InputChanged:Connect(function(i)
+            if drag and i.UserInputType == Enum.UserInputType.MouseMovement then apply(i.Position.X) end
+        end)
+        scroll.AncestryChanged:Connect(function()
+            if not scroll.Parent then ue:Disconnect(); uc:Disconnect() end
+        end)
+        return card
+    end
+
+    -- ── UI Customization ────────────────────────────────────────────────────
+    SectionLabel("🎨  UI Customization", y)
+    y = y + 26
+
+    MakeSlider(y, "Accent Hue (color wheel °)", 0, 359, UICustom.AccentH, "%d°", function(v)
+        UICustom.AccentH = v
+        ApplyAccent()
+        if MainFrame then MainFrame.BackgroundTransparency = 1 - UICustom.Opacity end
+    end)
+    y = y + 76
+
+    MakeSlider(y, "Accent Saturation", 0, 1, UICustom.AccentS, "%.2f", function(v)
+        UICustom.AccentS = v
+        ApplyAccent()
+    end)
+    y = y + 76
+
+    MakeSlider(y, "Accent Brightness", 0.3, 1, UICustom.AccentV, "%.2f", function(v)
+        UICustom.AccentV = v
+        ApplyAccent()
+    end)
+    y = y + 76
+
+    MakeSlider(y, "UI Opacity", 0.1, 1, UICustom.Opacity, "%.0f%%", function(v)
+        UICustom.Opacity = v
+        if MainFrame then MainFrame.BackgroundTransparency = 1 - v end
+    end)
+    y = y + 76
+
+    -- Reset colors button
+    local resetBtn = Create("TextButton", {
+        Size = UDim2.new(1, -20, 0, 36), Position = UDim2.new(0, 10, 0, y),
+        BackgroundColor3 = Colors.Card, BorderSizePixel = 0,
+        Text = "Reset to Default Colors", TextColor3 = Colors.TextMuted,
+        TextSize = 12, Font = Enum.Font.GothamSemibold,
+        AutoButtonColor = false, Parent = scroll
+    })
+    RoundCorner(resetBtn, 10)
+    Stroke(resetBtn, Colors.Border, 1)
+    resetBtn.MouseButton1Click:Connect(function()
+        UICustom.AccentH = 210
+        UICustom.AccentS = 0.75
+        UICustom.AccentV = 0.90
+        UICustom.Opacity = 1.0
+        ApplyAccent()
+        showNotification("🎨  Colors reset to default blue theme", 2)
+        -- Rebuild tab to reflect new slider positions
+        Settings.UI.Tab = "Settings"
+        RefreshContent()
+    end)
+    resetBtn.MouseEnter:Connect(function()
+        TweenService:Create(resetBtn, TweenInfo.new(0.12),
+            {BackgroundColor3 = Color3.fromRGB(165, 195, 230)}):Play()
+    end)
+    resetBtn.MouseLeave:Connect(function()
+        TweenService:Create(resetBtn, TweenInfo.new(0.12),
+            {BackgroundColor3 = Colors.Card}):Play()
+    end)
+    y = y + 44
+
+    -- ── Anti-AFK Status ─────────────────────────────────────────────────────
+    y = y + 8
+    SectionLabel("⚙️  System", y)
+    y = y + 26
+
+    local afkCard = Create("Frame", {
+        Size = UDim2.new(1, -20, 0, 62), Position = UDim2.new(0, 10, 0, y),
+        BackgroundColor3 = Colors.Card, BorderSizePixel = 0, Parent = scroll
+    })
+    RoundCorner(afkCard, 12)
+    local afkBar = Create("Frame", {
+        Size = UDim2.new(0, 3, 1, -16), Position = UDim2.new(0, 10, 0, 8),
+        BackgroundColor3 = Colors.Accent, BorderSizePixel = 0, Parent = afkCard
+    })
+    RoundCorner(afkBar, 4)
+    Create("TextLabel", {
+        Size = UDim2.new(0, 28, 0, 28), Position = UDim2.new(0, 22, 0, 17),
+        BackgroundTransparency = 1, Text = "🛡", TextSize = 22,
+        Font = Enum.Font.GothamBold, Parent = afkCard
+    })
+    Create("TextLabel", {
+        Size = UDim2.new(0, 280, 0, 20), Position = UDim2.new(0, 58, 0, 10),
+        BackgroundTransparency = 1, Text = "Anti-AFK", TextColor3 = Colors.TextMain,
+        TextSize = 13, Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Left, Parent = afkCard
+    })
+    Create("TextLabel", {
+        Size = UDim2.new(0, 280, 0, 16), Position = UDim2.new(0, 58, 0, 32),
+        BackgroundTransparency = 1, Text = "Always active — prevents AFK kick",
+        TextColor3 = Colors.TextMuted, TextSize = 11, Font = Enum.Font.Gotham,
+        TextXAlignment = Enum.TextXAlignment.Left, Parent = afkCard
+    })
+    local pillBG = Create("Frame", {
+        Size = UDim2.new(0, 46, 0, 24), Position = UDim2.new(1, -58, 0.5, -12),
+        BackgroundColor3 = Color3.fromRGB(30, 120, 30), BorderSizePixel = 0, Parent = afkCard
+    })
+    RoundCorner(pillBG, 12)
+    local knob = Create("Frame", {
+        Size = UDim2.new(0, 18, 0, 18), Position = UDim2.new(0, 24, 0.5, -9),
+        BackgroundColor3 = Color3.fromRGB(220, 220, 220), BorderSizePixel = 0, Parent = pillBG
+    })
+    RoundCorner(knob, 9)
+    Create("TextLabel", {
+        Size = UDim2.new(0, 46, 0, 14), Position = UDim2.new(1, -58, 0.5, 14),
+        BackgroundTransparency = 1, Text = "ON",
+        TextColor3 = Color3.fromRGB(80, 200, 80),
+        TextSize = 10, Font = Enum.Font.GothamBold, Parent = afkCard
+    })
+    y = y + 70
+
+    scroll.CanvasSize = UDim2.new(0, 0, 0, y + 12)
+end
+
+local RefreshContent
+RefreshContent = function()
+    ClearContent()
+    if Settings.UI.Tab == "Notifications" then CreateHomeTab()
+    elseif Settings.UI.Tab == "Home" then CreateHomeTab()
+    elseif Settings.UI.Tab == "ESP" then CreateESPTab()
+    elseif Settings.UI.Tab == "Farming" then CreateFarmingTab()
+    elseif Settings.UI.Tab == "Settings" then CreateSettingsTab()
+    end
+end
+
+-- ============================================
+-- BUILD WINDOW
+-- ============================================
+local function BuildWindow()
+    ScreenGui = Create("ScreenGui", {
+        Name = "SoulHub", ResetOnSpawn = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Parent = PlayerGui
+    })
+
+    MainFrame = Create("Frame", {
+        Name = "Main", Size = UDim2.new(0, 750, 0, 400),
+        Position = UDim2.new(0.5, -375, 0.5, -200),
+        BackgroundColor3 = Colors.Frame, BorderSizePixel = 0, ClipsDescendants = true, Parent = ScreenGui
+    })
+    RoundCorner(MainFrame, 16)
+    Stroke(MainFrame, Colors.Border, 5)
+
+    TitleBar = Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 45), BackgroundColor3 = Colors.Darker,
+        BorderSizePixel = 0, Parent = MainFrame
+    })
+    RoundCorner(TitleBar, 16)
+    Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 10), Position = UDim2.new(0, 0, 1, -10),
+        BackgroundColor3 = Colors.Darker, BorderSizePixel = 0, Parent = TitleBar
+    })
+    Create("TextLabel", {
+        Size = UDim2.new(0, 320, 1, 0), Position = UDim2.new(0, 15, 0, 0),
+        BackgroundTransparency = 1, Text = LocalPlayer.Name .. " - Soul Cultivation",
+        TextColor3 = Colors.TextMain, TextSize = 16, Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Left, Parent = TitleBar
+    })
+
+    local MinBtn = Create("TextButton", {
+        Size = UDim2.new(0, 30, 0, 30), Position = UDim2.new(1, -38, 0, 7),
+        BackgroundColor3 = Color3.fromRGB(80, 130, 200), Text = "X",
+        TextColor3 = Color3.fromRGB(140, 200, 255), TextSize = 14,
+        Font = Enum.Font.GothamBold, Parent = TitleBar
+    })
+    RoundCorner(MinBtn, 6)
+    MinBtn.MouseButton1Click:Connect(function()
+        Settings.UI.Visible = false
+        MainFrame.Visible = false
+        showNotification("🔴  UI Minimized — Press Right Shift to reopen", 3)
+    end)
+
+    local Sidebar = Create("Frame", {
+        Size = UDim2.new(0, 70, 1, -45), Position = UDim2.new(0, 0, 0, 45),
+        BackgroundColor3 = Color3.fromRGB(155, 190, 228), BorderSizePixel = 0, Parent = MainFrame
+    })
+    RoundCorner(Sidebar, 16)
+    Create("Frame", {
+        Size = UDim2.new(0, 70, 0, 20), Position = UDim2.new(0, 0, 0, 0),
+        BackgroundColor3 = Color3.fromRGB(155, 190, 228), BorderSizePixel = 0, Parent = Sidebar
+    })
+    Create("Frame", {
+        Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -20, 1, -20),
+        BackgroundColor3 = Color3.fromRGB(155, 190, 228), BorderSizePixel = 0, Parent = Sidebar
+    })
+
+    ContentFrame = Create("Frame", {
+        Name = "Content", Size = UDim2.new(1, -70, 1, -45),
+        Position = UDim2.new(0, 70, 0, 45), BackgroundTransparency = 1, Parent = MainFrame
+    })
+
+    local tabButtons = {}
+    local function SetTabVisual(active)
+        for tab, btn in pairs(tabButtons) do
+            if tab == active then
+                btn.BackgroundColor3 = Color3.fromRGB(120, 165, 215)
+                btn.TextColor3 = Colors.Accent
+            else
+                btn.BackgroundColor3 = Color3.fromRGB(175, 205, 238)
+                btn.TextColor3 = Colors.TextMuted
+            end
+        end
+    end
+
+    local BTN_W   = 56
+    local BTN_H   = 46
+    local BTN_X   = (70 - BTN_W) / 2
+    local BTN_GAP = 5
+    local BTN_START = 5
+
+    -- BuildNotifBellIcon removed — using module-level BuildNotifMessageIcon (N4)
+
+    local tooltip = Create("TextLabel", {
+        Size = UDim2.new(0, 80, 0, 26),
+        Position = UDim2.new(0, 78, 0, 0),
+        BackgroundColor3 = Color3.fromRGB(195, 220, 248),
+        BorderSizePixel = 0,
+        Text = "",
+        TextColor3 = Color3.fromRGB(10, 45, 120),
+        TextSize = 13,
+        Font = Enum.Font.GothamBold,
+        Visible = false,
+        ZIndex = 50,
+        Parent = MainFrame,
+    })
+    RoundCorner(tooltip, 6)
+    Stroke(tooltip, Colors.Border, 1)
+
+    local function CreateTabButton(text, posY, tabName, isSettings)
+        local bh = isSettings and 46 or BTN_H
+        local btn = Create("TextButton", {
+            Size = UDim2.new(0, BTN_W, 0, bh),
+            Position = UDim2.new(0, BTN_X, 0, posY),
+            BackgroundColor3 = Color3.fromRGB(175, 205, 238), BorderSizePixel = 0,
+            Text = "", TextColor3 = Colors.TextMuted, TextSize = 15,
+            Font = Enum.Font.GothamBold, Parent = Sidebar
+        })
+        RoundCorner(btn, 12)
+
+        if tabName == "Home" then
+            BuildImageIcon(btn, ICON_HOME)
+        elseif tabName == "ESP" then
+            BuildImageIcon(btn, ICON_ESP)
+        elseif tabName == "Farming" then
+            BuildFittedIcon(btn, ICON_FARMING)
+        elseif tabName == "Notifications" then
+            BuildNotifMessageIcon(btn)
+        elseif tabName == "Settings" then
+            BuildSettingsSlidersIcon(btn)
+        end
+
+        btn.MouseEnter:Connect(function()
+            local btnAbsPos = btn.AbsolutePosition
+            local mainAbsPos = MainFrame.AbsolutePosition
+            local relY = btnAbsPos.Y - mainAbsPos.Y + (bh / 2) - 13
+            tooltip.Text = tabName
+            tooltip.Position = UDim2.new(0, 76, 0, relY)
+            tooltip.Visible = true
+        end)
+        btn.MouseLeave:Connect(function()
+            tooltip.Visible = false
+        end)
+
+        btn.MouseButton1Click:Connect(function()
+            Settings.UI.Tab = tabName
+            SetTabVisual(tabName)
+            RefreshContent()
+            tooltip.Visible = false
+        end)
+        tabButtons[tabName] = btn
+    end
+
+    local homeY    = BTN_START + 10
+    local espY     = homeY    + BTN_H + 15
+    local farmingY = espY     + BTN_H + 15
+    local notifY   = farmingY + BTN_H + 15
+
+    CreateTabButton("", homeY,    "Home")
+    CreateTabButton("", espY,     "ESP")
+    CreateTabButton("", farmingY, "Farming")
+    CreateTabButton("", notifY,   "Notifications")
+
+    CreateTabButton("", 0, "Settings", true)
+    tabButtons["Settings"].Position = UDim2.new(0, BTN_X, 1, -(BTN_H + 8))
+
+    SetTabVisual(Settings.UI.Tab)
+
+    local TitleDivider = Create("TextButton", {
+        Size     = UDim2.new(1, 0, 0, 6),
+        Position = UDim2.new(0, 0, 0, 45),
+        BackgroundColor3 = Colors.Border,
+        BorderSizePixel = 0,
+        Text = "", AutoButtonColor = false,
+        ZIndex = 10, Parent = MainFrame
+    })
+
+    local dragStart, startPos
+    local function startDrag(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragStart = inp.Position
+            startPos  = MainFrame.Position
+        end
+    end
+    TitleBar.InputBegan:Connect(startDrag)
+    Sidebar.InputBegan:Connect(startDrag)
+    TitleDivider.InputBegan:Connect(startDrag)
+
+    local MIN_W, MIN_H = 300, 200
+
+    -- Subtle resize handle — 3 small dots in the bottom-right corner
+    local HANDLE_SIZE = 16
+    local resizeHandle = Create("Frame", {
+        Size     = UDim2.new(0, HANDLE_SIZE, 0, HANDLE_SIZE),
+        Position = UDim2.new(1, -HANDLE_SIZE - 3, 1, -HANDLE_SIZE - 3),
+        BackgroundTransparency = 1,
+        BorderSizePixel  = 0,
+        ZIndex = 25, Parent = MainFrame,
+    })
+
+    -- 3 small grip dots (lower-right diagonal pattern)
+    local dotColor = Color3.fromRGB(40, 70, 120)
+    for i = 1, 3 do
+        local dot = Create("Frame", {
+            Size = UDim2.new(0, 2, 0, 2),
+            Position = UDim2.new(0, 4 + (i-1)*4, 0, 4 + (i-1)*4),
+            BackgroundColor3 = dotColor,
+            BackgroundTransparency = 0.3,
+            BorderSizePixel = 0,
+            ZIndex = 26, Parent = resizeHandle,
+        })
+        RoundCorner(dot, 2)
+    end
+
+    local resizeBtn = Create("TextButton", {
+        Size             = UDim2.new(1, 0, 1, 0),
+        Position         = UDim2.new(0, 0, 0, 0),
+        BackgroundTransparency = 1,
+        Text             = "", BorderSizePixel = 0,
+        AutoButtonColor  = false,
+        ZIndex           = 27, Parent = resizeHandle,
+    })
+
+    local resizing = false
+    local resizeStart, startSize2
+
+    resizeBtn.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+            resizing    = true
+            resizeStart = inp.Position
+            startSize2  = MainFrame.Size
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(inp)
+        if inp.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+        if dragStart then
+            local d = inp.Position - dragStart
+            MainFrame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+        if resizing then
+            local dx = inp.Position.X - resizeStart.X
+            local dy = inp.Position.Y - resizeStart.Y
+            MainFrame.Size = UDim2.new(0,
+                math.max(MIN_W, startSize2.X.Offset + dx), 0,
+                math.max(MIN_H, startSize2.Y.Offset + dy))
+            resizeHandle.Position = UDim2.new(1, -HANDLE_SIZE - 3, 1, -HANDLE_SIZE - 3)
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragStart = nil
+            resizing  = false
+        end
+    end)
+end
+
+-- ============================================
+-- INITIALIZE
+-- ============================================
+BuildWindow()
+ApplyAccent()   -- Apply light-blue/dark-blue theme
+RefreshContent()
+
+MainFrame.Visible = Settings.UI.Visible
+
+InitializeESP()
+StartESPUpdates()
+
+table.insert(Connections, Players.PlayerAdded:Connect(OnPlayerAdded))
+table.insert(Connections, Players.PlayerRemoving:Connect(OnPlayerRemoving))
+
+local toggleConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if input.UserInputType == Enum.UserInputType.Keyboard
+        and input.KeyCode == Enum.KeyCode.RightShift then
+        Settings.UI.Visible = not Settings.UI.Visible
+        if MainFrame then MainFrame.Visible = Settings.UI.Visible end
+        if not Settings.UI.Visible then
+            showNotification("🔴  UI Minimized — Press Right Shift to reopen", 2)
+        end
+        debugLog("UI toggled: " .. tostring(Settings.UI.Visible))
+    end
+end)
+table.insert(Connections, toggleConn)
+
+debugLog("Soul Hub loaded. Press Right Shift to toggle UI.")
+
+-- ============================================
+-- ANTI-AFK (always on)
+-- ============================================
+task.spawn(function()
+    local VIM = nil
+    pcall(function()
+        VIM = game:GetService("VirtualInputManager")
+    end)
+
+    while true do
+        task.wait(60)
+        local char = LocalPlayer.Character
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+
+        if VIM then
+            pcall(function()
+                VIM:SendKeyEvent(true,  Enum.KeyCode.Space, false, game)
+                task.wait(0.1)
+                VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+            end)
+        elseif hum and hum.Health > 0 then
+            pcall(function()
+                hum.Jump = true
+            end)
+        end
+
+        debugLog("[AntiAFK] Ping sent")
+    end
+end)
