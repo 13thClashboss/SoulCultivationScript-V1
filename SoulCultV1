@@ -43,9 +43,15 @@ do
         if _hum then
             pcall(function() _hum.PlatformStand = false end)
         end
-        -- Restore collision on all parts
-        for _, p in ipairs(_char:GetDescendants()) do
-            if p:IsA("BasePart") then
+        -- Restore collision on core body parts only (not clothing/accessories)
+        local _coreNames = {HumanoidRootPart=true,Torso=true,UpperTorso=true,
+            LowerTorso=true,Head=true,["Left Arm"]=true,["Right Arm"]=true,
+            ["Left Leg"]=true,["Right Leg"]=true,LeftUpperArm=true,
+            RightUpperArm=true,LeftLowerArm=true,RightLowerArm=true,
+            LeftHand=true,RightHand=true,LeftUpperLeg=true,RightUpperLeg=true,
+            LeftLowerLeg=true,RightLowerLeg=true,LeftFoot=true,RightFoot=true}
+        for _, p in ipairs(_char:GetChildren()) do
+            if p:IsA("BasePart") and _coreNames[p.Name] then
                 pcall(function() p.CanCollide = true end)
             end
         end
@@ -89,44 +95,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local TweenService = game:GetService("TweenService")
 
--- ============================================
--- CHARACTER RESPAWN FOR FRESH BODY RELOAD
--- Kills the character immediately, waits for
--- the new body to fully load, then proceeds.
--- ============================================
-do
-    local _char = LocalPlayer.Character
-    local _hum  = _char and _char:FindFirstChildOfClass("Humanoid")
-    if _hum and _hum.Health > 0 then
-        print("[SoulHub] Respawning for fresh body reload...")
-        -- Trigger death via health (works in most games)
-        local respawned = false
-        local _respawnConn
-        _respawnConn = LocalPlayer.CharacterAdded:Connect(function(newChar)
-            respawned = true
-            pcall(function() _respawnConn:Disconnect() end)
-        end)
-        pcall(function() _hum.Health = 0 end)
-        -- Fallback: if health kill doesn't work, try LoadCharacter
-        local timeout = tick()
-        while not respawned and (tick() - timeout) < 3 do
-            task.wait(0.1)
-        end
-        if not respawned then
-            pcall(function() LocalPlayer:LoadCharacter() end)
-            timeout = tick()
-            while not respawned and (tick() - timeout) < 5 do
-                task.wait(0.1)
-            end
-        end
-        -- Wait for the new character to be fully loaded
-        local newChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-        newChar:WaitForChild("HumanoidRootPart", 10)
-        newChar:WaitForChild("Humanoid", 10)
-        task.wait(0.5)  -- brief settle so physics is stable
-        print("[SoulHub] Fresh body loaded — continuing setup")
-    end
-end
+
 
 -- ============================================
 -- NOTIFICATION (bottom-right)
@@ -151,27 +120,6 @@ local function showNotification(message, duration)
     corner.CornerRadius = UDim.new(0, 10)
     corner.Parent = notif
 
-    -- Dot-corner accent marks (matches icon frame style)
-    local dotClr = Color3.fromRGB(55, 120, 230)
-    local dotSz  = 5
-    local dotPositions = {
-        UDim2.new(0, -1, 0, -1),
-        UDim2.new(1, -dotSz + 1, 0, -1),
-        UDim2.new(0, -1, 1, -dotSz + 1),
-        UDim2.new(1, -dotSz + 1, 1, -dotSz + 1),
-    }
-    for _, pos in ipairs(dotPositions) do
-        local d = Instance.new("Frame")
-        d.Size = UDim2.new(0, dotSz, 0, dotSz)
-        d.Position = pos
-        d.BackgroundColor3 = dotClr
-        d.BorderSizePixel = 0
-        d.ZIndex = 12
-        d.Parent = notif
-        local dc = Instance.new("UICorner")
-        dc.CornerRadius = UDim.new(1, 0)
-        dc.Parent = d
-    end
 
     local stroke = Instance.new("UIStroke")
     stroke.Color = Color3.fromRGB(55, 120, 230)
@@ -230,12 +178,24 @@ local Connections = {}
 -- Register connections table in _G so the NEXT run can disconnect them all cleanly
 _G.__SoulHubConnections = Connections
 
+-- Core body part names that should always have collision
+local CORE_PARTS = {
+    HumanoidRootPart = true, Torso = true, UpperTorso = true, LowerTorso = true,
+    Head = true, ["Left Arm"] = true, ["Right Arm"] = true,
+    ["Left Leg"] = true, ["Right Leg"] = true,
+    LeftUpperArm = true, RightUpperArm = true,
+    LeftLowerArm = true, RightLowerArm = true,
+    LeftHand = true, RightHand = true,
+    LeftUpperLeg = true, RightUpperLeg = true,
+    LeftLowerLeg = true, RightLowerLeg = true,
+    LeftFoot = true, RightFoot = true,
+}
+
 local function CleanupLeftovers()
     local char = LocalPlayer.Character
     if not char then return end
     local root = char:FindFirstChild("HumanoidRootPart")
     if root then
-        -- Remove all known movers by name
         for _, n in ipairs({"SoulFarmVelocity","SoulFarmGyro",
                             "_ABossBodyVel","_ABossBodyGyro","_ABossAngVel"}) do
             local m = root:FindFirstChild(n)
@@ -247,9 +207,10 @@ local function CleanupLeftovers()
         pcall(function() humanoid.PlatformStand = false end)
         pcall(function() humanoid.Sit = false end)
     end
-    -- Restore collision
-    for _, p in ipairs(char:GetDescendants()) do
-        if p:IsA("BasePart") then
+    -- Only restore CanCollide on core body parts — NOT accessories/clothing
+    -- which the game intentionally sets to CanCollide=false
+    for _, p in ipairs(char:GetChildren()) do
+        if p:IsA("BasePart") and CORE_PARTS[p.Name] then
             pcall(function() p.CanCollide = true end)
         end
     end
@@ -943,18 +904,15 @@ end
 -- TAB ICON ASSET IDs
 -- ============================================
 local ICON_HOME    = "rbxassetid://130920309508459"
-local ICON_ESP     = "rbxassetid://74373794162555"
+local ICON_ESP     = "rbxassetid://115865668064229"
 local ICON_FARMING = "rbxassetid://113977003779500"
 
 -- ============================================
 -- SHARED ICON FRAME BUILDER
 -- Creates the dot-corner framed background used by all tab icons.
 -- ============================================
-local ICON_BORDER  = Color3.fromRGB(55, 120, 230)
-local ICON_DOT_CLR = Color3.fromRGB(55, 120, 230)
-local ICON_BG      = Color3.fromRGB(11, 14, 26)
-local ICON_DOT_SZ  = 5
-local ICON_CORN_R  = 10
+local ICON_BG     = Color3.fromRGB(11, 14, 26)
+local ICON_CORN_R = 10   -- original Sharingan corner radius
 
 local function BuildIconFrame(parent)
     local bg = Create("Frame", {
@@ -966,35 +924,39 @@ local function BuildIconFrame(parent)
         Parent           = parent,
     })
     RoundCorner(bg, ICON_CORN_R)
-    local border = Create("Frame", {
-        Size                   = UDim2.new(1, 0, 1, 0),
-        Position               = UDim2.new(0, 0, 0, 0),
-        BackgroundTransparency = 1,
-        BorderSizePixel        = 0,
-        ZIndex                 = 4,
-        Parent                 = parent,
-    })
-    RoundCorner(border, ICON_CORN_R)
-    Stroke(border, ICON_BORDER, 1.5)  -- same border weight as Sharingan
-    local half = ICON_DOT_SZ / 2
-    local dotPositions = {
-        UDim2.new(0, -half, 0, -half),
-        UDim2.new(1, -half, 0, -half),
-        UDim2.new(0, -half, 1, -half),
-        UDim2.new(1, -half, 1, -half),
-    }
-    for _, pos in ipairs(dotPositions) do
-        local dot = Create("Frame", {
-            Size             = UDim2.new(0, ICON_DOT_SZ, 0, ICON_DOT_SZ),
-            Position         = pos,
-            BackgroundColor3 = ICON_DOT_CLR,
-            BorderSizePixel  = 0,
-            ZIndex           = 5,
-            Parent           = parent,
-        })
-        RoundCorner(dot, 999)
-    end
     return bg
+end
+
+-- Draws four L-shaped corner accents on top of the icon image.
+-- Each arm has rounded caps (UICorner 999) so they look smooth,
+-- but the two arms per corner don't connect — giving a bracket look.
+local function AddCornerAccents(parent)
+    local LEN = 9    -- arm length in px
+    local THK = 2    -- arm thickness in px
+    local C   = Color3.fromRGB(55, 120, 230)
+    local Z   = 10
+
+    local function Arm(w, h, xs, xo, ys, yo)
+        local f = Create("Frame", {
+            Size             = UDim2.new(0, w, 0, h),
+            Position         = UDim2.new(xs, xo, ys, yo),
+            BackgroundColor3 = C, BorderSizePixel = 0, ZIndex = Z, Parent = parent,
+        })
+        RoundCorner(f, 999)
+    end
+
+    -- TL
+    Arm(LEN, THK,  0,0,       0,0)       -- horizontal
+    Arm(THK, LEN,  0,0,       0,0)       -- vertical
+    -- TR
+    Arm(LEN, THK,  1,-LEN,    0,0)
+    Arm(THK, LEN,  1,-THK,    0,0)
+    -- BL
+    Arm(LEN, THK,  0,0,       1,-THK)
+    Arm(THK, LEN,  0,0,       1,-LEN)
+    -- BR
+    Arm(LEN, THK,  1,-LEN,    1,-THK)
+    Arm(THK, LEN,  1,-THK,    1,-LEN)
 end
 
 local function BuildImageIcon(parent, assetId)
@@ -1009,6 +971,7 @@ local function BuildImageIcon(parent, assetId)
         ZIndex                 = 3,
         Parent                 = bg,
     })
+    AddCornerAccents(parent)
     return bg
 end
 
@@ -1024,6 +987,7 @@ local function BuildFittedIcon(parent, assetId)
         ZIndex                 = 3,
         Parent                 = bg,
     })
+    AddCornerAccents(parent)
     return bg
 end
 
@@ -1073,57 +1037,147 @@ local function BuildSettingsSlidersIcon(parent)
         })
         RoundCorner(inner, 999)
     end
+    AddCornerAccents(parent)
     return bg
 end
 
 -- ============================================
--- N4: MESSAGE DOTS icon  (Notifications tab)
--- Uses UDim2 fractions so it fills the icon frame like Sharingan.
--- Bubble: 14% inset all sides, tail bottom-left.
+-- NOTIFICATIONS icon — rbxassetid image, same frame+corners as others
+-- FIXED: image expanded slightly past clip boundary so it fills the
+-- full frame edge-to-edge without white-corner bleed, stays centered.
 -- ============================================
+-- ============================================
+-- ESP icon — overflow+clip so the image fills the frame properly
+-- and stays centered within the dot-corner brackets
+-- ============================================
+local function BuildESPIcon(parent)
+    local outer = Create("Frame", {
+        Size             = UDim2.new(1, 0, 1, 0),
+        Position         = UDim2.new(0, 0, 0, 0),
+        BackgroundColor3 = ICON_BG,
+        BorderSizePixel  = 0,
+        ZIndex           = 2,
+        Parent           = parent,
+    })
+    RoundCorner(outer, ICON_CORN_R)
+
+    local OVERFLOW = -3   -- bleed past each edge to fill the frame
+    local OFFSET_Y = 0    -- vertical nudge for centering (adjust if needed)
+
+    local clipFrame = Create("Frame", {
+        Size             = UDim2.new(1, 0, 1, 0),
+        Position         = UDim2.new(0, 0, 0, 0),
+        BackgroundColor3 = ICON_BG,
+        BorderSizePixel  = 0,
+        ClipsDescendants = true,
+        ZIndex           = 3,
+        Parent           = outer,
+    })
+    RoundCorner(clipFrame, ICON_CORN_R)
+
+    Create("ImageLabel", {
+        Size                   = UDim2.new(1, OVERFLOW * 2, 1, OVERFLOW * 2),
+        Position               = UDim2.new(0, -OVERFLOW, 0, -OVERFLOW + OFFSET_Y),
+        BackgroundTransparency = 1,
+        Image                  = ICON_ESP,
+        ScaleType              = Enum.ScaleType.Fit,
+        ZIndex                 = 4,
+        Parent                 = clipFrame,
+    })
+
+    AddCornerAccents(parent)
+    return outer
+end
+
+local ICON_NOTIF     = "rbxassetid://101000249615483"
+local ICON_TELEPORT  = "rbxassetid://83452052665934"
+
+-- ============================================
+-- TELEPORT icon — same overflow+clip approach
+-- ============================================
+local function BuildTeleportIcon(parent)
+    local outer = Create("Frame", {
+        Size             = UDim2.new(1, 0, 1, 0),
+        Position         = UDim2.new(0, 0, 0, 0),
+        BackgroundColor3 = ICON_BG,
+        BorderSizePixel  = 0,
+        ZIndex           = 2,
+        Parent           = parent,
+    })
+    RoundCorner(outer, ICON_CORN_R)
+
+    local OVERFLOW = 4   -- bleed past each edge to fill the frame
+    local OFFSET_Y = 0   -- vertical nudge for centering (adjust if needed)
+
+    local clipFrame = Create("Frame", {
+        Size             = UDim2.new(1, 0, 1, 0),
+        Position         = UDim2.new(0, 0, 0, 0),
+        BackgroundColor3 = ICON_BG,
+        BorderSizePixel  = 0,
+        ClipsDescendants = true,
+        ZIndex           = 3,
+        Parent           = outer,
+    })
+    RoundCorner(clipFrame, ICON_CORN_R)
+
+    Create("ImageLabel", {
+        Size                   = UDim2.new(1, OVERFLOW * 2, 1, OVERFLOW * 2),
+        Position               = UDim2.new(0, -OVERFLOW, 0, -OVERFLOW + OFFSET_Y),
+        BackgroundTransparency = 1,
+        Image                  = ICON_TELEPORT,
+        ScaleType              = Enum.ScaleType.Fit,
+        ZIndex                 = 4,
+        Parent                 = clipFrame,
+    })
+
+    AddCornerAccents(parent)
+    return outer
+end
+
 local function BuildNotifMessageIcon(parent)
-    local bg  = BuildIconFrame(parent)
-    local C   = Color3.fromRGB(55, 120, 230)
-    local BGC = Color3.fromRGB(18, 24, 50)
-
-    -- Bubble body: fills most of the frame, leaves room for tail at bottom
-    local bubble = Create("Frame", {
-        Size     = UDim2.new(0.80, 0, 0.68, 0),
-        Position = UDim2.new(0.10, 0, 0.08, 0),
-        BackgroundColor3 = BGC,
-        BorderSizePixel  = 0, ZIndex = 3, Parent = bg,
+    local outer = Create("Frame", {
+        Size             = UDim2.new(1, 0, 1, 0),
+        Position         = UDim2.new(0, 0, 0, 0),
+        BackgroundColor3 = ICON_BG,
+        BorderSizePixel  = 0,
+        ZIndex           = 2,
+        Parent           = parent,
     })
-    RoundCorner(bubble, 6)
-    Stroke(bubble, C, 1.5)
+    RoundCorner(outer, ICON_CORN_R)
 
-    -- Three dots centred in bubble using UDim2 fractions
-    local dotPositions = { 0.22, 0.50, 0.78 }
-    for _, xFrac in ipairs(dotPositions) do
-        local dot = Create("Frame", {
-            Size     = UDim2.new(0.14, 0, 0.26, 0),
-            Position = UDim2.new(xFrac - 0.07, 0, 0.37, 0),
-            BackgroundColor3 = C,
-            BorderSizePixel  = 0, ZIndex = 4, Parent = bubble,
-        })
-        RoundCorner(dot, 999)
-    end
+    -- The bell PNG has heavy built-in transparent padding so ScaleType.Fit
+    -- always renders it small. We overflow the ImageLabel past the frame
+    -- boundaries and use ClipsDescendants to trim it, forcing the bell glyph
+    -- itself to fill more of the visible area.
+    local OVERFLOW = 4    -- how many px to bleed past each edge (makes bell bigger)
+    local OFFSET_Y = 3    -- extra downward nudge to visually center the bell
 
-    -- Tail: small rounded nub bottom-left of bubble
-    local tail = Create("Frame", {
-        Size     = UDim2.new(0.18, 0, 0.20, 0),
-        Position = UDim2.new(0.14, 0, 0.72, 0),
-        BackgroundColor3 = BGC,
-        BorderSizePixel  = 0, ZIndex = 3, Parent = bg,
+    local clipFrame = Create("Frame", {
+        Size             = UDim2.new(1, 0, 1, 0),
+        Position         = UDim2.new(0, 0, 0, 0),
+        BackgroundColor3 = ICON_BG,
+        BorderSizePixel  = 0,
+        ClipsDescendants = true,
+        ZIndex           = 3,
+        Parent           = outer,
     })
-    RoundCorner(tail, 3)
-    -- Left accent line continuing the bubble stroke onto the tail
-    Create("Frame", {
-        Size     = UDim2.new(0.025, 0, 0.22, 0),
-        Position = UDim2.new(0.14, 0, 0.70, 0),
-        BackgroundColor3 = C,
-        BorderSizePixel  = 0, ZIndex = 5, Parent = bg,
+    RoundCorner(clipFrame, ICON_CORN_R)
+
+    Create("ImageLabel", {
+        Size                   = UDim2.new(1, OVERFLOW * 2, 1, OVERFLOW * 2),
+        Position               = UDim2.new(0, -OVERFLOW, 0, -OVERFLOW + OFFSET_Y),
+        BackgroundTransparency = 1,
+        Image                  = ICON_NOTIF,
+        ScaleType              = Enum.ScaleType.Fit,
+        ImageColor3            = Color3.fromRGB(255, 255, 255),
+        ZIndex                 = 4,
+        Parent                 = clipFrame,
     })
-    return bg
+
+    -- Corner accents go on parent (the tab button) so they align with
+    -- every other tab icon's bracket borders
+    AddCornerAccents(parent)
+    return outer
 end
 
 -- ============================================
@@ -1988,11 +2042,8 @@ local function _enableFlight(hrp)
                 end)
             end
         end
-        -- Keep Humanoid from triggering fall/physics animations
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            pcall(function() hum.PlatformStand = true end)
-        end
+        -- NOTE: do NOT set PlatformStand=true here — it causes the
+        -- character to float/T-pose. CanCollide=false is sufficient for noclip.
     end)
 
     debugLog("[AutoBoss] Flight + continuous no-clip enabled (250 studs/s)")
@@ -2049,17 +2100,8 @@ local function _disableFlight()
 end
 
 -- ── CONFIRMED ATTACK SYSTEM (from dump) ──────────────────────────────────────
--- The boss has Tools named "Light" and "Heavy" in its backpack.
--- Soul Cultivation fires attacks by invoking RemoteEvents under
--- ReplicatedStorage.RemoteEvents — specifically ones related to combat actions.
--- The player's own Light/Heavy tools work the same way.
---
--- Strategy: grab the player's Light tool, equip it if needed, then fire
--- every RemoteEvent in RS.RemoteEvents with the tool + action args.
--- We also try direct tool activation via Tool:Activate().
-
-local _attackRemoteFolder = nil   -- RS.RemoteEvents folder, cached
-local _lightTool          = nil   -- player's "Light" tool, cached
+local _attackRemoteFolder = nil
+local _lightTool          = nil
 
 local function _getAttackRemoteFolder()
     if _attackRemoteFolder and _attackRemoteFolder.Parent then
@@ -2226,13 +2268,10 @@ local function _bossLoop()
             end
         else
             -- ── Phase 2: Lock into a stationary hover beside the boss ─────────
-            -- Pick a fixed offset position and hold it still — no CFrame snapping
-            -- which causes the floating-over and hands-up glitch.
-            local hoverOffset = Vector3.new(0, 2, 3)   -- beside+slightly above
+            local hoverOffset = Vector3.new(0, 2, 3)
             local hoverTarget = bossPos + hoverOffset
 
             if bv and bv.Parent then
-                -- Gently push toward hover position without hard-teleporting
                 local toHover = hoverTarget - myPos
                 if toHover.Magnitude > 0.8 then
                     bv.Velocity = toHover.Unit * math.min(toHover.Magnitude * 8, 60)
@@ -2255,9 +2294,9 @@ local function _bossLoop()
                 attackTick = now
                 _fireLightAttack()
             end
-        end  -- end if dist > BOSS_ATTACK_RANGE / else
+        end
 
-    end  -- end while FarmingSettings.AutoBoss
+    end
 
     _disableFlight()
     debugLog("[AutoBoss] Loop ended")
@@ -2568,7 +2607,7 @@ local function CreateFarmingTab()
     end)
     y = y + 52
 
-    -- ── Targeted RemoteEvents dump (what got cut off in the log) ─────────────
+    -- ── Targeted RemoteEvents dump ────────────────────────────────────────────
     local remoteSpyBtn = Create("TextButton", {
         Size = UDim2.new(1, -20, 0, 44), Position = UDim2.new(0, 10, 0, y),
         BackgroundColor3 = Color3.fromRGB(24, 30, 52), BorderSizePixel = 0,
@@ -2612,14 +2651,12 @@ local function CreateFarmingTab()
                 return
             end
             local count = 0
-            -- Print all children AND grandchildren
             for _, obj in ipairs(reFolder:GetDescendants()) do
                 print(string.format("  [%-16s]  %s", obj.ClassName, obj:GetFullName()))
                 count = count + 1
             end
             print(string.format("[SoulHub] %d entries in RS.RemoteEvents.", count))
 
-            -- Also dump player's tools (Light/Heavy confirmed in dump)
             print("\n======= YOUR TOOLS (Backpack + Character) =======")
             local bp = LocalPlayer:FindFirstChild("Backpack")
             if bp then
@@ -2661,14 +2698,9 @@ local function CreateSettingsTab()
         })
     end
 
-    -- ════════════════════════════════════════════
-    -- UI CUSTOMIZATION — compact single card
-    -- Left: color wheel (ring)   Right: swatch + opacity + reset
-    -- ════════════════════════════════════════════
     SecLabel("🎨  Appearance", y)
     y = y + 20
 
-    -- Card is 108 px tall — tight but breathable
     local CARD_H = 112
     local custCard = Create("Frame", {
         Size = UDim2.new(1, -20, 0, CARD_H),
@@ -2676,18 +2708,16 @@ local function CreateSettingsTab()
         BackgroundColor3 = Colors.Card, BorderSizePixel = 0, Parent = scroll,
     })
     RoundCorner(custCard, 12)
-    -- Accent left bar
     local acBar = Create("Frame", {
         Size = UDim2.new(0, 3, 1, 0), BackgroundColor3 = Colors.Accent,
         BorderSizePixel = 0, Parent = custCard,
     })
     RoundCorner(acBar, 3)
 
-    -- ── Color wheel ring ──────────────────────────────────────────
-    local RING_SZ   = 88          -- outer diameter
-    local RING_X    = 14          -- card-relative X of ring top-left
+    local RING_SZ   = 88
+    local RING_X    = 14
     local RING_Y    = math.floor((CARD_H - RING_SZ) / 2)
-    local SEG_N     = 30          -- more segments = smoother
+    local SEG_N     = 30
     local OUTER_R   = RING_SZ / 2
     local INNER_R   = OUTER_R * 0.54
     local CX        = RING_X + OUTER_R
@@ -2714,7 +2744,6 @@ local function CreateSettingsTab()
         table.insert(ringSegs, { frame = seg, hue = hue })
     end
 
-    -- Centre hole (card colour)
     Create("Frame", {
         Size             = UDim2.new(0, INNER_R*2, 0, INNER_R*2),
         Position         = UDim2.new(0, CX - INNER_R, 0, CY - INNER_R),
@@ -2722,7 +2751,6 @@ local function CreateSettingsTab()
         BorderSizePixel  = 0, ZIndex = 4, Parent = custCard,
     })
 
-    -- Selector dot
     local selDot = Create("Frame", {
         Size             = UDim2.new(0, 10, 0, 10),
         BackgroundColor3 = Color3.fromRGB(255, 255, 255),
@@ -2738,12 +2766,8 @@ local function CreateSettingsTab()
     end
     UpdateSelDot(UICustom.AccentH / 360)
 
-    -- ── Right panel ───────────────────────────────────────────────
-    local RX   = RING_X + RING_SZ + 12   -- right panel X
-    local RW   = 680                       -- will be clamped by parent; use big number
-    -- (actual width = card width - RX - 10 right pad, but we size by UDim2 offsets from right)
+    local RX   = RING_X + RING_SZ + 12
 
-    -- Color swatch (shows current accent, labelled with hue degrees)
     local swatch = Create("Frame", {
         Size             = UDim2.new(1, -(RX + 10), 0, 26),
         Position         = UDim2.new(0, RX, 0, 10),
@@ -2759,7 +2783,6 @@ local function CreateSettingsTab()
         Font = Enum.Font.GothamBold, Parent = swatch,
     })
 
-    -- Opacity label
     Create("TextLabel", {
         Size = UDim2.new(1, -(RX + 10), 0, 11), Position = UDim2.new(0, RX, 0, 42),
         BackgroundTransparency = 1, Text = "OPACITY",
@@ -2767,7 +2790,6 @@ local function CreateSettingsTab()
         TextXAlignment = Enum.TextXAlignment.Left, Parent = custCard,
     })
 
-    -- Opacity slider track
     local opTrack = Create("Frame", {
         Size     = UDim2.new(1, -(RX + 10), 0, 5),
         Position = UDim2.new(0, RX, 0, 57),
@@ -2795,7 +2817,6 @@ local function CreateSettingsTab()
         TextXAlignment = Enum.TextXAlignment.Right, Parent = custCard,
     })
 
-    -- Reset button — small, right-aligned
     local resetBtn = Create("TextButton", {
         Size     = UDim2.new(1, -(RX + 10), 0, 20),
         Position = UDim2.new(0, RX, 0, CARD_H - 28),
@@ -2807,7 +2828,6 @@ local function CreateSettingsTab()
     RoundCorner(resetBtn, 5)
     Stroke(resetBtn, Colors.Border, 1)
 
-    -- ── Interaction ───────────────────────────────────────────────
     local function SetHue(h)
         UICustom.AccentH = h * 360
         ApplyAccent()
@@ -2878,9 +2898,6 @@ local function CreateSettingsTab()
 
     y = y + CARD_H + 16
 
-    -- ════════════════════════════════════════════
-    -- SYSTEM — Anti-AFK status
-    -- ════════════════════════════════════════════
     SecLabel("⚙  System", y)
     y = y + 20
 
@@ -2931,6 +2948,205 @@ local function CreateSettingsTab()
 
     scroll.CanvasSize = UDim2.new(0, 0, 0, y + 12)
 end
+
+-- ============================================
+-- TELEPORT TAB
+-- ============================================
+local function CreateTeleportTab()
+    local scroll = Create("ScrollingFrame", {
+        Size = UDim2.new(1, -8, 1, -8), Position = UDim2.new(0, 4, 0, 4),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4,
+        CanvasSize = UDim2.new(0, 0, 0, 0), Parent = ContentFrame
+    })
+
+    local y = 10
+
+    Create("TextLabel", {
+        Size = UDim2.new(1, -20, 0, 20), Position = UDim2.new(0, 10, 0, y),
+        BackgroundTransparency = 1, Text = "Teleport", TextColor3 = Colors.TextMain,
+        TextSize = 14, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = scroll
+    })
+    y = y + 30
+
+    local locations = {
+        { name = "Spawn",         icon = "🏠", desc = "Return to spawn point" },
+        { name = "Market",        icon = "🏪", desc = "Player trading market" },
+        { name = "Dungeon",       icon = "⚔️",  desc = "Combat dungeon entrance" },
+        { name = "Boss Arena",    icon = "🐉", desc = "World boss spawn area" },
+        { name = "Treasure Cave", icon = "💎", desc = "Hidden treasure location" },
+        { name = "Altar",         icon = "🔥", desc = "Cultivation altar grounds" },
+    }
+
+    local function MakeTeleportRow(posY, loc)
+        local card = Create("TextButton", {
+            Size = UDim2.new(1, -20, 0, 54), Position = UDim2.new(0, 10, 0, posY),
+            BackgroundColor3 = Colors.Card, BorderSizePixel = 0,
+            Text = "", AutoButtonColor = false, Parent = scroll
+        })
+        RoundCorner(card, 12)
+
+        local accentBar = Create("Frame", {
+            Size = UDim2.new(0, 3, 1, -16), Position = UDim2.new(0, 10, 0, 8),
+            BackgroundColor3 = Colors.Accent, BorderSizePixel = 0, Parent = card
+        })
+        RoundCorner(accentBar, 4)
+
+        Create("TextLabel", {
+            Size = UDim2.new(0, 28, 0, 28), Position = UDim2.new(0, 22, 0, 13),
+            BackgroundTransparency = 1, Text = loc.icon, TextSize = 20,
+            Font = Enum.Font.GothamBold, Parent = card
+        })
+
+        Create("TextLabel", {
+            Size = UDim2.new(0, 280, 0, 20), Position = UDim2.new(0, 58, 0, 8),
+            BackgroundTransparency = 1, Text = loc.name, TextColor3 = Colors.TextMain,
+            TextSize = 13, Font = Enum.Font.GothamBold,
+            TextXAlignment = Enum.TextXAlignment.Left, Parent = card
+        })
+
+        Create("TextLabel", {
+            Size = UDim2.new(0, 280, 0, 16), Position = UDim2.new(0, 58, 0, 28),
+            BackgroundTransparency = 1, Text = loc.desc, TextColor3 = Colors.TextMuted,
+            TextSize = 11, Font = Enum.Font.Gotham,
+            TextXAlignment = Enum.TextXAlignment.Left, Parent = card
+        })
+
+        -- Teleport button pill
+        local tpBtn = Create("TextButton", {
+            Size = UDim2.new(0, 64, 0, 26),
+            Position = UDim2.new(1, -76, 0.5, -13),
+            BackgroundColor3 = Colors.Accent, BorderSizePixel = 0,
+            Text = "GO", TextColor3 = Color3.fromRGB(255, 255, 255),
+            TextSize = 11, Font = Enum.Font.GothamBold,
+            AutoButtonColor = false, Parent = card
+        })
+        RoundCorner(tpBtn, 8)
+
+        card.MouseEnter:Connect(function()
+            TweenService:Create(card, TweenInfo.new(0.12),
+                {BackgroundColor3 = Color3.fromRGB(30, 40, 72)}):Play()
+        end)
+        card.MouseLeave:Connect(function()
+            TweenService:Create(card, TweenInfo.new(0.12),
+                {BackgroundColor3 = Colors.Card}):Play()
+        end)
+
+        local function doTeleport()
+            local char = LocalPlayer.Character
+            local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+            if not hrp then
+                showNotification("❌  Spawn your character first", 2)
+                return
+            end
+
+            -- Search workspace for a part/model matching the location name
+            local target = nil
+            local lowerName = loc.name:lower()
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj.Name:lower():find(lowerName, 1, true) then
+                    if obj:IsA("BasePart") or obj:IsA("SpawnLocation") then
+                        target = obj
+                        break
+                    elseif obj:IsA("Model") then
+                        local root = obj.PrimaryPart or obj:FindFirstChildOfClass("BasePart")
+                        if root then target = root; break end
+                    end
+                end
+            end
+
+            if target then
+                hrp.CFrame = target.CFrame + Vector3.new(0, 5, 0)
+                showNotification("✅  Teleported to " .. loc.name, 2)
+            else
+                showNotification("❌  " .. loc.name .. " not found in workspace", 3)
+            end
+        end
+
+        tpBtn.MouseButton1Click:Connect(doTeleport)
+        card.MouseButton1Click:Connect(doTeleport)
+    end
+
+    for _, loc in ipairs(locations) do
+        MakeTeleportRow(y, loc)
+        y = y + 62
+    end
+
+    -- Custom teleport by coordinate
+    y = y + 8
+    Create("TextLabel", {
+        Size = UDim2.new(1, -20, 0, 14), Position = UDim2.new(0, 12, 0, y),
+        BackgroundTransparency = 1, Text = "CUSTOM COORDINATES",
+        TextColor3 = Colors.TextMuted, TextSize = 9, Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Left, LetterSpacing = 2, Parent = scroll,
+    })
+    y = y + 20
+
+    local coordCard = Create("Frame", {
+        Size = UDim2.new(1, -20, 0, 80), Position = UDim2.new(0, 10, 0, y),
+        BackgroundColor3 = Colors.Card, BorderSizePixel = 0, Parent = scroll
+    })
+    RoundCorner(coordCard, 12)
+    Create("Frame", {
+        Size = UDim2.new(0, 3, 1, 0), BackgroundColor3 = Colors.Accent,
+        BorderSizePixel = 0, Parent = coordCard
+    })
+
+    local coords = { X = "0", Y = "0", Z = "0" }
+    local function MakeCoordBox(label, xPos, key)
+        Create("TextLabel", {
+            Size = UDim2.new(0, 60, 0, 14), Position = UDim2.new(0, xPos, 0, 10),
+            BackgroundTransparency = 1, Text = label, TextColor3 = Colors.TextMuted,
+            TextSize = 10, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Center,
+            Parent = coordCard
+        })
+        local box = Create("TextBox", {
+            Size = UDim2.new(0, 60, 0, 28), Position = UDim2.new(0, xPos, 0, 26),
+            BackgroundColor3 = Color3.fromRGB(10, 13, 25), BorderSizePixel = 0,
+            Text = "0", TextColor3 = Colors.TextMain, TextSize = 12,
+            Font = Enum.Font.GothamBold, ClearTextOnFocus = true,
+            PlaceholderText = "0", PlaceholderColor3 = Colors.TextMuted,
+            Parent = coordCard
+        })
+        RoundCorner(box, 6)
+        Stroke(box, Colors.Border, 1)
+        box:GetPropertyChangedSignal("Text"):Connect(function()
+            coords[key] = box.Text
+        end)
+        return box
+    end
+
+    MakeCoordBox("X", 16,  "X")
+    MakeCoordBox("Y", 88,  "Y")
+    MakeCoordBox("Z", 160, "Z")
+
+    local tpCoordBtn = Create("TextButton", {
+        Size = UDim2.new(0, 64, 0, 28), Position = UDim2.new(0, 236, 0, 26),
+        BackgroundColor3 = Colors.Accent, BorderSizePixel = 0,
+        Text = "GO", TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 11, Font = Enum.Font.GothamBold,
+        AutoButtonColor = false, Parent = coordCard
+    })
+    RoundCorner(tpCoordBtn, 8)
+
+    tpCoordBtn.MouseButton1Click:Connect(function()
+        local char = LocalPlayer.Character
+        local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp then showNotification("❌  Spawn your character first", 2); return end
+        local x = tonumber(coords.X)
+        local y_ = tonumber(coords.Y)
+        local z = tonumber(coords.Z)
+        if not x or not y_ or not z then
+            showNotification("❌  Invalid coordinates", 2); return
+        end
+        hrp.CFrame = CFrame.new(x, y_, z)
+        showNotification(string.format("✅  Teleported to %.0f, %.0f, %.0f", x, y_, z), 2)
+    end)
+
+    y = y + 88
+    scroll.CanvasSize = UDim2.new(0, 0, 0, y)
+end
+
 local RefreshContent
 RefreshContent = function()
     ClearContent()
@@ -2938,6 +3154,7 @@ RefreshContent = function()
     elseif Settings.UI.Tab == "Home" then CreateHomeTab()
     elseif Settings.UI.Tab == "ESP" then CreateESPTab()
     elseif Settings.UI.Tab == "Farming" then CreateFarmingTab()
+    elseif Settings.UI.Tab == "Teleport" then CreateTeleportTab()
     elseif Settings.UI.Tab == "Settings" then CreateSettingsTab()
     end
 end
@@ -3026,8 +3243,6 @@ local function BuildWindow()
     local BTN_GAP = 5
     local BTN_START = 5
 
-    -- BuildNotifBellIcon removed — using module-level BuildNotifMessageIcon (N4)
-
     local tooltip = Create("TextLabel", {
         Size = UDim2.new(0, 80, 0, 26),
         Position = UDim2.new(0, 78, 0, 0),
@@ -3058,9 +3273,11 @@ local function BuildWindow()
         if tabName == "Home" then
             BuildImageIcon(btn, ICON_HOME)
         elseif tabName == "ESP" then
-            BuildImageIcon(btn, ICON_ESP)
+            BuildESPIcon(btn)
         elseif tabName == "Farming" then
             BuildFittedIcon(btn, ICON_FARMING)
+        elseif tabName == "Teleport" then
+            BuildTeleportIcon(btn)
         elseif tabName == "Notifications" then
             BuildNotifMessageIcon(btn)
         elseif tabName == "Settings" then
@@ -3088,15 +3305,17 @@ local function BuildWindow()
         tabButtons[tabName] = btn
     end
 
-    local homeY    = BTN_START + 10
-    local espY     = homeY    + BTN_H + 15
-    local farmingY = espY     + BTN_H + 15
-    local notifY   = farmingY + BTN_H + 15
+    local homeY     = BTN_START + 10
+    local espY      = homeY     + BTN_H + 15
+    local farmingY  = espY      + BTN_H + 15
+    local teleportY = farmingY  + BTN_H + 15
+    local notifY    = teleportY + BTN_H + 15
 
-    CreateTabButton("", homeY,    "Home")
-    CreateTabButton("", espY,     "ESP")
-    CreateTabButton("", farmingY, "Farming")
-    CreateTabButton("", notifY,   "Notifications")
+    CreateTabButton("", homeY,     "Home")
+    CreateTabButton("", espY,      "ESP")
+    CreateTabButton("", farmingY,  "Farming")
+    CreateTabButton("", teleportY, "Teleport")
+    CreateTabButton("", notifY,    "Notifications")
 
     CreateTabButton("", 0, "Settings", true)
     tabButtons["Settings"].Position = UDim2.new(0, BTN_X, 1, -(BTN_H + 8))
@@ -3125,7 +3344,6 @@ local function BuildWindow()
 
     local MIN_W, MIN_H = 300, 200
 
-    -- Subtle resize handle — 3 small dots in the bottom-right corner
     local HANDLE_SIZE = 16
     local resizeHandle = Create("Frame", {
         Size     = UDim2.new(0, HANDLE_SIZE, 0, HANDLE_SIZE),
@@ -3135,7 +3353,6 @@ local function BuildWindow()
         ZIndex = 25, Parent = MainFrame,
     })
 
-    -- 3 small grip dots (lower-right diagonal pattern)
     local dotColor = Color3.fromRGB(40, 70, 120)
     for i = 1, 3 do
         local dot = Create("Frame", {
@@ -3199,7 +3416,7 @@ end
 -- INITIALIZE
 -- ============================================
 BuildWindow()
-ApplyAccent()   -- Apply light-blue/dark-blue theme
+ApplyAccent()
 RefreshContent()
 
 MainFrame.Visible = Settings.UI.Visible
